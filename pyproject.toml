@@ -1,0 +1,24 @@
+[project]
+name = "phish-setlist-maker"
+version = "0.1.0"
+description = "Trying to make a phish setlist predictor"
+authors = [
+    {name = "Sam Marshall",email = "samuel.r.marshall@gmail.com"}
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "sqlalchemy (>=2.0.38,<3.0.0)",
+    "psycopg2 (>=2.9.10,<3.0.0)",
+    "python-dotenv (>=1.0.1,<2.0.0)",
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.group.dev.dependencies]
+notebook = "^7.3.2"
+
