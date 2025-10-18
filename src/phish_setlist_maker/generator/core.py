@@ -20,6 +20,7 @@ from .historical import (
     song_frequencies_by_set,
     songs_seen_by_date,
 )
+from .rules import apply_rules
 
 
 @dataclass(slots=True)
@@ -56,6 +57,8 @@ class SetlistGenerator:
     def __init__(self, session: Session, rng: Optional[Random] = None):
         self.session = session
         self.rng = rng or Random()
+        self._adjacency_bonus = 0.0
+        self._adjacency_min_support = 0
 
     def generate(
         self,
@@ -66,6 +69,7 @@ class SetlistGenerator:
         set_lengths: Optional[Dict[str, int]] = None,
         era: Optional[str] = None,
         year: Optional[int] = None,
+        exclude_previous_show: bool = True,
     ) -> GeneratedSetlist:
         """Produce a setlist honoring baseline Phish show conventions.
 
@@ -77,6 +81,8 @@ class SetlistGenerator:
             set_lengths: Optional overrides for how many songs each set should contain.
             era: Era identifier (e.g., "3.0") restricting historical data.
             year: Restrict historical data to performances through the end of ``year``.
+            exclude_previous_show: When ``True`` (default), songs from the previous show
+                are excluded from selection.
         """
 
         if num_sets not in (2, 3):
@@ -92,7 +98,12 @@ class SetlistGenerator:
 
         lengths = {**DEFAULT_SET_LENGTHS, **(set_lengths or {})}
 
-        previous_show_songs = set(previous_show_tracks(self.session, reference))
+        previous_show_songs: Set[str] = set()
+        previous_show_date: Optional[date] = None
+        if exclude_previous_show:
+            previous_show_songs = set(previous_show_tracks(self.session, reference))
+            previous_show_date = self._previous_show_date(reference)
+
         seen_songs = songs_seen_by_date(self.session, cutoff)
 
         frequencies_by_set = song_frequencies_by_set(
@@ -124,9 +135,12 @@ class SetlistGenerator:
 
         used_songs: Set[str] = set(previous_show_songs)
         metadata_notes: List[str] = []
-        if previous_show_songs:
+        if exclude_previous_show and previous_show_songs:
+            label = (
+                previous_show_date.isoformat() if isinstance(previous_show_date, date) else "the previous show"
+            )
             metadata_notes.append(
-                f"Excluded {len(previous_show_songs)} songs played on {self._previous_show_date(reference)}"
+                f"Excluded {len(previous_show_songs)} songs played on {label}"
             )
 
         sets: List[SetSegment] = []
@@ -137,6 +151,8 @@ class SetlistGenerator:
 
             set_stats = segment_stats_map.get(canonical_set)
             set_longform = segment_longform_titles.get(canonical_set, set())
+
+            adjacency_map = None
 
             set_songs, set_notes = self._compose_segment(
                 canonical_set=canonical_set,
@@ -149,6 +165,7 @@ class SetlistGenerator:
                 allow_sequences=True,
                 allow_single_song=False,
                 longform_titles=set_longform,
+                adjacency_map=adjacency_map,
             )
             metadata_notes.extend(set_notes)
             sets.append(SetSegment(label=set_label, songs=set_songs))
@@ -158,6 +175,7 @@ class SetlistGenerator:
             desired_encore = lengths.get("encore", DEFAULT_SET_LENGTHS["encore"])
             encore_stats = segment_stats_map.get("encore")
             encore_longform = segment_longform_titles.get("encore", set())
+            encore_adjacency = None
 
             encore_songs, encore_notes = self._compose_segment(
                 canonical_set="encore",
@@ -170,9 +188,19 @@ class SetlistGenerator:
                 allow_sequences=True,
                 allow_single_song=True,
                 longform_titles=encore_longform,
+                adjacency_map=encore_adjacency,
             )
             metadata_notes.extend(encore_notes)
             encore_segment = SetSegment(label="Encore", songs=encore_songs)
+
+        apply_rules(
+            sets=sets,
+            encore=encore_segment,
+            stats_by_segment=segment_stats_map,
+            eligible_songs=seen_songs,
+            used_songs=used_songs,
+            metadata_notes=metadata_notes,
+        )
 
         metadata = GenerationMetadata(
             reference_date=reference,
@@ -213,6 +241,7 @@ class SetlistGenerator:
         allow_sequences: bool,
         allow_single_song: bool,
         longform_titles: Set[str],
+        adjacency_map: Optional[Dict[str, Dict[str, int]]],
     ) -> Tuple[List[str], List[str]]:
         notes: List[str] = []
         songs: List[str] = []
@@ -233,12 +262,15 @@ class SetlistGenerator:
 
         remaining = max(0, desired_count - len(songs))
         if remaining > 0:
+            previous_song = songs[-1] if songs else None
             additional = self._pick_songs_for_set(
                 frequencies_by_set,
                 canonical_set,
                 remaining,
                 used_songs,
                 eligible_songs,
+                previous_song=previous_song,
+                adjacency_map=adjacency_map,
             )
             songs.extend(additional)
 
@@ -248,12 +280,15 @@ class SetlistGenerator:
             and len(songs) == 1
             and songs[0] not in longform_titles
         ):
+            previous_song = songs[-1] if songs else None
             extra = self._pick_songs_for_set(
                 frequencies_by_set,
                 canonical_set,
                 1,
                 used_songs,
                 eligible_songs,
+                previous_song=previous_song,
+                adjacency_map=adjacency_map,
             )
             songs.extend(extra)
 
@@ -357,16 +392,26 @@ class SetlistGenerator:
         desired_count: int,
         used_songs: Set[str],
         eligible_songs: Iterable[str],
+        *,
+        previous_song: Optional[str] = None,
+        adjacency_map: Optional[Dict[str, Dict[str, int]]] = None,
     ) -> List[str]:
         pool = self._build_candidate_pool(frequencies_by_set, target_set, eligible_songs)
         selection: List[str] = []
+        prev = previous_song
 
         for _ in range(desired_count):
-            choice = self._weighted_pick(pool, used_songs)
+            choice = self._weighted_pick(
+                pool,
+                used_songs,
+                previous_song=prev,
+                adjacency_map=adjacency_map,
+            )
             if not choice:
                 break
             selection.append(choice)
             used_songs.add(choice)
+            prev = choice
             pool = [freq for freq in pool if freq.title not in used_songs]
 
         return selection
@@ -402,19 +447,50 @@ class SetlistGenerator:
 
         return candidates
 
-    def _weighted_pick(self, pool: List[SongFrequency], used_songs: Set[str]) -> Optional[str]:
+    def _weighted_pick(
+        self,
+        pool: List[SongFrequency],
+        used_songs: Set[str],
+        *,
+        previous_song: Optional[str] = None,
+        adjacency_map: Optional[Dict[str, Dict[str, int]]] = None,
+    ) -> Optional[str]:
         available = [freq for freq in pool if freq.title not in used_songs]
         if not available:
             return None
 
-        total_weight = sum(freq.weight for freq in available)
+        weighted_candidates: List[Tuple[SongFrequency, float]] = [
+            (freq, float(freq.weight)) for freq in available
+        ]
+
+        if previous_song and adjacency_map:
+            neighbors = adjacency_map.get(previous_song)
+            if neighbors:
+                filtered_neighbors = {
+                    song: count
+                    for song, count in neighbors.items()
+                    if count >= self._adjacency_min_support
+                }
+                if filtered_neighbors:
+                    max_neighbor = max(filtered_neighbors.values())
+                else:
+                    max_neighbor = 0
+                if max_neighbor > 0:
+                    for idx, (freq, weight) in enumerate(weighted_candidates):
+                        neighbor_weight = filtered_neighbors.get(freq.title)
+                        if neighbor_weight:
+                            normalized = neighbor_weight / max_neighbor
+                            boost = 1.0 + self._adjacency_bonus * normalized
+                            weighted_candidates[idx] = (freq, weight * boost)
+
+        total_weight = sum(weight for _, weight in weighted_candidates)
         if total_weight <= 0:
             return None
 
         rand = self.rng.random() * total_weight
         cumulative = 0.0
-        for freq in available:
-            cumulative += freq.weight
+        for freq, weight in weighted_candidates:
+            cumulative += weight
             if rand <= cumulative:
                 return freq.title
-        return available[-1].title
+        return weighted_candidates[-1][0].title

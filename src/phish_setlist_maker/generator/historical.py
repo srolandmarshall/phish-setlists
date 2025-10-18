@@ -143,6 +143,7 @@ class SegmentStatistics:
     average_durations_by_count: Dict[int, float]
     top_sequences: List[Tuple[Tuple[str, ...], int]]
     longform_songs: List[Tuple[str, float]]
+    adjacency_map: Dict[str, Dict[str, int]]
 
 
 def segment_statistics(
@@ -218,6 +219,14 @@ def segment_statistics(
 
     top_sequences = sequence_counter.most_common(top_n_sequences)
 
+    adjacency_map: Dict[str, Dict[str, int]] = {}
+    for sequence, weight in sequence_counter.items():
+        if len(sequence) < 2:
+            continue
+        for first, second in zip(sequence, sequence[1:]):
+            adjacency_map.setdefault(first, {})
+            adjacency_map[first][second] = adjacency_map[first].get(second, 0) + weight
+
     longform_songs = [
         (title, mean(durations))
         for title, durations in longform_song_durations.items()
@@ -232,6 +241,7 @@ def segment_statistics(
         average_durations_by_count=average_durations,
         top_sequences=top_sequences,
         longform_songs=longform_songs,
+        adjacency_map={key: dict(value.items()) for key, value in adjacency_map.items()},
     )
 
 
