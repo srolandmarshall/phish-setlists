@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 from datetime import date, datetime, timezone
 from pathlib import Path
-from random import Random
+from random import Random, SystemRandom
 from typing import Dict, Optional
 import sys
 
@@ -59,12 +59,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--seed",
         type=int,
-        help="Seed for deterministic generation.",
+        help="Seed for deterministic generation. Defaults to cryptographically random when omitted.",
     )
     parser.add_argument(
         "--allow-previous-show",
         action="store_true",
         help="Allow songs from the previous show to be eligible (default excludes them).",
+    )
+    parser.add_argument(
+        "--html",
+        action="store_true",
+        help="Render output as HTML instead of Markdown.",
     )
     parser.add_argument(
         "--set-length",
@@ -131,13 +136,79 @@ def render_markdown(output_path: Path, generated, generated_at: datetime) -> Non
     output_path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def render_html(output_path: Path, generated, generated_at: datetime) -> None:
+    metadata = generated.metadata
+
+    parts = [
+        "<!DOCTYPE html>",
+        "<html lang=\"en\">",
+        "<head>",
+        "  <meta charset=\"utf-8\" />",
+        "  <title>Generated Setlist</title>",
+        "  <style>",
+        "    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 2rem; line-height: 1.5; }",
+        "    h1, h2 { color: #2a2a2a; }",
+        "    ol { padding-left: 1.5rem; }",
+        "    .segment { margin-bottom: 1.5rem; }",
+        "    .notes ul { list-style: disc; margin-left: 1.5rem; }",
+        "  </style>",
+        "</head>",
+        "<body>",
+        "  <h1>Generated Setlist</h1>",
+        "  <section>",
+        "    <h2>Context</h2>",
+        "    <ul>",
+        f"      <li>Generated at: {generated_at.isoformat(timespec='seconds')}</li>",
+        f"      <li>Reference date: {metadata.reference_date}</li>",
+        f"      <li>Cutoff date: {metadata.cutoff_date}</li>",
+        f"      <li>Era: {metadata.era or 'All history'}</li>",
+        f"      <li>Year limit: {metadata.year if metadata.year else 'Full run'}</li>",
+        "    </ul>",
+        "  </section>",
+    ]
+
+    for segment in generated.sets:
+        parts.append("  <section class=\"segment\">")
+        parts.append(f"    <h2>{segment.label}</h2>")
+        parts.append("    <ol>")
+        for song in segment.songs:
+            parts.append(f"      <li>{song}</li>")
+        parts.append("    </ol>")
+        parts.append("  </section>")
+
+    if generated.encore:
+        parts.append("  <section class=\"segment\">")
+        parts.append("    <h2>Encore</h2>")
+        parts.append("    <ol>")
+        for song in generated.encore.songs:
+            parts.append(f"      <li>{song}</li>")
+        parts.append("    </ol>")
+        parts.append("  </section>")
+
+    if metadata.notes:
+        parts.append("  <section class=\"notes\">")
+        parts.append("    <h2>Notes</h2>")
+        parts.append("    <ul>")
+        for note in metadata.notes:
+            parts.append(f"      <li>{note}</li>")
+        parts.append("    </ul>")
+        parts.append("  </section>")
+
+    parts.append("</body>")
+    parts.append("</html>")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(parts), encoding="utf-8")
+
+
 def main() -> None:
     args = parse_args()
 
     set_length_overrides = parse_set_lengths(args.set_length)
 
-    rng = Random(args.seed) if args.seed is not None else None
-    length_rng: Optional[Random] = Random(args.seed) if args.seed is not None else None
+    seed_value = args.seed if args.seed is not None else SystemRandom().randint(0, 2**32 - 1)
+    rng = Random(seed_value)
+    length_rng: Optional[Random] = Random(seed_value)
 
     with session_scope() as session:
         generator = SetlistGenerator(session, rng=rng)
@@ -167,10 +238,15 @@ def main() -> None:
     now_utc = datetime.now(timezone.utc)
     timestamp = now_utc.strftime("%Y%m%d_%H%M%S")
     output_dir = PROJECT_ROOT / "data"
-    output_path = output_dir / f"setlist_{timestamp}.md"
+    extension = "html" if args.html else "md"
+    output_path = output_dir / f"setlist_{timestamp}.{extension}"
 
-    render_markdown(output_path, generated, now_utc)
-    print(f"Wrote setlist to {output_path}")
+    if args.html:
+        render_html(output_path, generated, now_utc)
+    else:
+        render_markdown(output_path, generated, now_utc)
+
+    print(f"Wrote setlist to {output_path} (seed={seed_value})")
 
 
 if __name__ == "__main__":
