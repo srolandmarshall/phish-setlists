@@ -1,2 +1,15 @@
 .env*
 data
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS cruft
+.DS_Store
