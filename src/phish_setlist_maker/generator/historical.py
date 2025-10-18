@@ -123,36 +123,41 @@ def song_frequencies_by_set(
 
 
 @dataclass(frozen=True)
-class EncorePattern:
-    """Represents a single encore performance sequence."""
+class SegmentPattern:
+    """Represents a single contiguous performance block (set or encore)."""
 
     show_id: int
     date: date
+    label: str
     titles: Tuple[str, ...]
     total_duration: float
 
 
 @dataclass(frozen=True)
-class EncoreStatistics:
-    """Aggregations describing encore structures."""
+class SegmentStatistics:
+    """Aggregations describing song structures for a specific set label."""
 
-    patterns: List[EncorePattern]
+    label: str
+    patterns: List[SegmentPattern]
     count_histogram: Dict[int, int]
     average_durations_by_count: Dict[int, float]
     top_sequences: List[Tuple[Tuple[str, ...], int]]
     longform_songs: List[Tuple[str, float]]
 
 
-def encore_statistics(
+def segment_statistics(
     session: Session,
     *,
+    target_set: str,
     cutoff_date: Optional[date] = None,
     era: Optional[str] = None,
     year: Optional[int] = None,
     top_n_sequences: int = 10,
     longform_threshold: int = 12 * 60,
-) -> EncoreStatistics:
-    """Compute descriptive statistics about encore song selections."""
+) -> SegmentStatistics:
+    """Compute descriptive statistics for the requested canonical set label."""
+
+    canonical_label = target_set
 
     show_ids_subquery = filter_shows_query(
         cutoff_date=cutoff_date,
@@ -160,37 +165,41 @@ def encore_statistics(
         year=year,
     ).subquery()
 
-    encore_stmt = (
-        select(Show.id, Show.date, Track.position, Track.title, Track.duration)
+    track_stmt = (
+        select(Show.id, Show.date, Track.set, Track.position, Track.title, Track.duration)
         .join(show_ids_subquery, Show.id == show_ids_subquery.c.id)
         .join(Track, Track.show_id == Show.id)
-        .where(Track.set.in_(SET_ALIASES["encore"]))
         .order_by(Show.date.asc(), Track.position.asc())
     )
 
-    encore_by_show: Dict[int, List[Tuple[int, str, float]]] = {}
-    encore_dates: Dict[int, date] = {}
-    for show_id, show_date, position, title, duration in session.execute(encore_stmt):
+    segments: Dict[Tuple[int, str], List[Tuple[int, str, float]]] = {}
+    segment_dates: Dict[Tuple[int, str], date] = {}
+    for show_id, show_date, raw_label, position, title, duration in session.execute(track_stmt):
+        canonical = normalize_set_label(raw_label)
+        if canonical != canonical_label:
+            continue
         seconds = (duration or 0) / 1000.0
-        encore_by_show.setdefault(show_id, []).append((position, title, seconds))
-        encore_dates[show_id] = show_date
+        key = (show_id, raw_label)
+        segments.setdefault(key, []).append((position, title, seconds))
+        segment_dates[key] = show_date
 
-    patterns: List[EncorePattern] = []
+    patterns: List[SegmentPattern] = []
     count_histogram: Counter[int] = Counter()
     duration_by_count: Dict[int, List[float]] = {}
     sequence_counter: Counter[Tuple[str, ...]] = Counter()
     longform_song_durations: Dict[str, List[float]] = {}
 
-    for show_id, tracks in encore_by_show.items():
+    for (show_id, raw_label), tracks in segments.items():
         tracks.sort(key=lambda item: item[0])
         titles = tuple(title for _, title, _ in tracks)
         total_duration = sum(duration for _, _, duration in tracks)
         count = len(titles)
 
         patterns.append(
-            EncorePattern(
+            SegmentPattern(
                 show_id=show_id,
-                date=encore_dates[show_id],
+                date=segment_dates[(show_id, raw_label)],
+                label=raw_label,
                 titles=titles,
                 total_duration=total_duration,
             )
@@ -199,7 +208,7 @@ def encore_statistics(
         duration_by_count.setdefault(count, []).append(total_duration)
         sequence_counter[titles] += 1
 
-        for title, duration in [(title, duration) for _, title, duration in tracks]:
+        for _, title, duration in tracks:
             if duration > 0:
                 longform_song_durations.setdefault(title, []).append(duration)
 
@@ -216,13 +225,41 @@ def encore_statistics(
     ]
     longform_songs.sort(key=lambda item: item[1], reverse=True)
 
-    return EncoreStatistics(
+    return SegmentStatistics(
+        label=canonical_label,
         patterns=patterns,
         count_histogram=dict(count_histogram),
         average_durations_by_count=average_durations,
         top_sequences=top_sequences,
         longform_songs=longform_songs,
     )
+
+
+def encore_statistics(
+    session: Session,
+    *,
+    cutoff_date: Optional[date] = None,
+    era: Optional[str] = None,
+    year: Optional[int] = None,
+    top_n_sequences: int = 10,
+    longform_threshold: int = 12 * 60,
+) -> SegmentStatistics:
+    """Backward-compatible wrapper returning encore statistics."""
+
+    return segment_statistics(
+        session,
+        target_set="encore",
+        cutoff_date=cutoff_date,
+        era=era,
+        year=year,
+        top_n_sequences=top_n_sequences,
+        longform_threshold=longform_threshold,
+    )
+
+
+# Backward-compatible aliases
+EncoreStatistics = SegmentStatistics
+EncorePattern = SegmentPattern
 
 
 def songs_seen_by_date(session: Session, cutoff: date) -> Iterable[str]:

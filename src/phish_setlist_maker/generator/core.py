@@ -13,10 +13,10 @@ from sqlalchemy.orm import Session
 from ..constants import DEFAULT_SET_LENGTHS, ERA_DEFINITIONS
 from ..models import Show
 from .historical import (
-    EncoreStatistics,
+    SegmentStatistics,
     SongFrequency,
-    encore_statistics,
     previous_show_tracks,
+    segment_statistics,
     song_frequencies_by_set,
     songs_seen_by_date,
 )
@@ -102,17 +102,25 @@ class SetlistGenerator:
             year=year,
         )
 
-        encore_stats: Optional[EncoreStatistics] = None
-        longform_titles: Set[str] = set()
+        # Pre-compute segment statistics and long-form song references.
+        segment_stats_map: Dict[str, Optional[SegmentStatistics]] = {}
+        segment_longform_titles: Dict[str, Set[str]] = {}
+
+        target_segments = [f"set{idx}" for idx in range(1, num_sets + 1)]
         if include_encore:
-            encore_stats = encore_statistics(
+            target_segments.append("encore")
+
+        for canonical in target_segments:
+            stats = segment_statistics(
                 self.session,
+                target_set=canonical,
                 cutoff_date=cutoff,
                 era=era,
                 year=year,
                 top_n_sequences=50,
             )
-            longform_titles = {title for title, _ in encore_stats.longform_songs}
+            segment_stats_map[canonical] = stats
+            segment_longform_titles[canonical] = {title for title, _ in stats.longform_songs}
 
         used_songs: Set[str] = set(previous_show_songs)
         metadata_notes: List[str] = []
@@ -126,25 +134,42 @@ class SetlistGenerator:
             canonical_set = f"set{idx}"
             set_label = f"Set {idx}"
             desired = lengths.get(canonical_set, 8)
-            set_songs = self._pick_songs_for_set(
-                frequencies_by_set, canonical_set, desired, used_songs, seen_songs
+
+            set_stats = segment_stats_map.get(canonical_set)
+            set_longform = segment_longform_titles.get(canonical_set, set())
+
+            set_songs, set_notes = self._compose_segment(
+                canonical_set=canonical_set,
+                segment_label=set_label,
+                desired_count=desired,
+                frequencies_by_set=frequencies_by_set,
+                stats=set_stats,
+                used_songs=used_songs,
+                eligible_songs=seen_songs,
+                allow_sequences=True,
+                allow_single_song=False,
+                longform_titles=set_longform,
             )
-            if len(set_songs) < desired:
-                metadata_notes.append(
-                    f"Only selected {len(set_songs)}/{desired} songs for {set_label};"
-                    " limited historical data."
-                )
+            metadata_notes.extend(set_notes)
             sets.append(SetSegment(label=set_label, songs=set_songs))
 
         encore_segment: Optional[SetSegment] = None
         if include_encore:
-            encore_songs, encore_notes = self._pick_encore_songs(
+            desired_encore = lengths.get("encore", DEFAULT_SET_LENGTHS["encore"])
+            encore_stats = segment_stats_map.get("encore")
+            encore_longform = segment_longform_titles.get("encore", set())
+
+            encore_songs, encore_notes = self._compose_segment(
+                canonical_set="encore",
+                segment_label="Encore",
+                desired_count=desired_encore,
                 frequencies_by_set=frequencies_by_set,
-                desired_override=lengths.get("encore"),
+                stats=encore_stats,
                 used_songs=used_songs,
                 eligible_songs=seen_songs,
-                stats=encore_stats,
-                longform_titles=longform_titles,
+                allow_sequences=True,
+                allow_single_song=True,
+                longform_titles=encore_longform,
             )
             metadata_notes.extend(encore_notes)
             encore_segment = SetSegment(label="Encore", songs=encore_songs)
@@ -175,116 +200,102 @@ class SetlistGenerator:
         )
         return self.session.execute(stmt).scalar_one_or_none()
 
-    def _pick_encore_songs(
+    def _compose_segment(
         self,
         *,
+        canonical_set: str,
+        segment_label: str,
+        desired_count: int,
         frequencies_by_set: Dict[str, List[SongFrequency]],
-        desired_override: Optional[int],
         used_songs: Set[str],
         eligible_songs: Iterable[str],
-        stats: Optional[EncoreStatistics],
+        stats: Optional[SegmentStatistics],
+        allow_sequences: bool,
+        allow_single_song: bool,
         longform_titles: Set[str],
     ) -> Tuple[List[str], List[str]]:
         notes: List[str] = []
+        songs: List[str] = []
 
-        if stats is None:
-            desired = desired_override or DEFAULT_SET_LENGTHS["encore"]
-        else:
-            recommended = self._recommended_encore_length(stats)
-            desired = desired_override if desired_override is not None else max(2, recommended)
+        max_length = desired_count if desired_count > 0 else None
 
-        max_length = desired_override
-
-        encore_songs: List[str] = []
-
-        if stats is not None:
-            sequence = self._choose_encore_sequence(
+        if allow_sequences and stats is not None and desired_count > 0:
+            sequence = self._choose_sequence(
                 stats=stats,
                 used_songs=used_songs,
                 eligible_songs=eligible_songs,
-                desired_length=desired,
+                desired_length=desired_count,
                 max_length=max_length,
             )
             if sequence:
-                encore_songs.extend(sequence)
+                songs.extend(sequence)
                 used_songs.update(sequence)
 
-        remaining = max(0, desired - len(encore_songs))
+        remaining = max(0, desired_count - len(songs))
         if remaining > 0:
             additional = self._pick_songs_for_set(
                 frequencies_by_set,
-                "encore",
+                canonical_set,
                 remaining,
                 used_songs,
                 eligible_songs,
             )
-            encore_songs.extend(additional)
+            songs.extend(additional)
 
         if (
-            len(encore_songs) == 1
-            and (desired_override is None or desired_override > 1)
-            and encore_songs[0] not in longform_titles
+            not allow_single_song
+            and desired_count > 1
+            and len(songs) == 1
+            and songs[0] not in longform_titles
         ):
             extra = self._pick_songs_for_set(
                 frequencies_by_set,
-                "encore",
+                canonical_set,
                 1,
                 used_songs,
                 eligible_songs,
             )
-            encore_songs.extend(extra)
+            songs.extend(extra)
 
         # Ensure uniqueness and order preservation after extensions.
         seen: Set[str] = set()
         deduped: List[str] = []
-        for song in encore_songs:
+        for song in songs:
             if song in seen:
                 continue
             seen.add(song)
             deduped.append(song)
-        encore_songs = deduped
+        songs = deduped
 
-        used_songs.update(encore_songs)
+        used_songs.update(songs)
 
-        if not encore_songs:
-            notes.append("No encore songs available; limited historical data.")
-        elif len(encore_songs) == 1:
-            song = encore_songs[0]
-            if song in longform_titles:
-                notes.append(f"Encore anchored by long-form performance of {song}.")
-            else:
-                notes.append(
-                    "Encore limited to a single song without long-form precedent;"
-                    " additional data may unlock multi-song encores."
-                )
-        elif stats is not None and desired_override is None and len(encore_songs) < desired:
+        if not songs:
+            notes.append(f"No songs selected for {segment_label}; limited historical data.")
+        elif len(songs) < desired_count:
             notes.append(
-                f"Encore truncated to {len(encore_songs)} songs (target {desired}); limited historical data."
+                f"Only selected {len(songs)}/{desired_count} songs for {segment_label}; limited historical data."
             )
+        elif len(songs) == 1:
+            song = songs[0]
+            if song in longform_titles:
+                notes.append(f"{segment_label} anchored by long-form performance of {song}.")
+            elif desired_count > 1:
+                if allow_single_song:
+                    notes.append(
+                        f"{segment_label} limited to a single song without long-form precedent;"
+                        " additional data may unlock longer segments."
+                    )
+                else:
+                    notes.append(
+                        f"{segment_label} limited to a single song; limited historical data."
+                    )
 
-        return encore_songs, notes
+        return songs, notes
 
-    def _recommended_encore_length(self, stats: Optional[EncoreStatistics]) -> int:
-        if not stats or not stats.count_histogram:
-            return DEFAULT_SET_LENGTHS["encore"]
-
-        sorted_counts = sorted(
-            stats.count_histogram.items(),
-            key=lambda item: (item[1], item[0]),
-            reverse=True,
-        )
-        mode = sorted_counts[0][0]
-        if mode == 1:
-            multi = [item for item in sorted_counts if item[0] >= 2]
-            if multi:
-                return multi[0][0]
-            return 1
-        return min(max(mode, 2), 3)
-
-    def _choose_encore_sequence(
+    def _choose_sequence(
         self,
         *,
-        stats: EncoreStatistics,
+        stats: SegmentStatistics,
         used_songs: Set[str],
         eligible_songs: Iterable[str],
         desired_length: int,
