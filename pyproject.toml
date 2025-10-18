@@ -12,6 +12,8 @@ dependencies = [
     "sqlalchemy (>=2.0.38,<3.0.0)",
     "psycopg2 (>=2.9.10,<3.0.0)",
     "python-dotenv (>=1.0.1,<2.0.0)",
+    "pandas (>=2.2.3,<3.0.0)",
+    "seaborn (>=0.13.2,<0.14.0)",
 ]
 
 
