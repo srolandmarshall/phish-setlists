@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 import re
 from random import Random, SystemRandom
-from typing import Dict, Iterable, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import requests
 import sys
@@ -88,6 +89,24 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+@dataclass(frozen=True)
+class SongDisplay:
+    """Presentation-friendly metadata for a single song appearance."""
+
+    title: str
+    mp3_url: Optional[str]
+    duration_seconds: Optional[int]
+    origin: Optional[str]
+    show_date: Optional[str] = None
+
+    @property
+    def duration_label(self) -> Optional[str]:
+        if self.duration_seconds is None or self.duration_seconds < 0:
+            return None
+        minutes, seconds = divmod(self.duration_seconds, 60)
+        return f"{minutes}:{seconds:02d}"
+
+
 def parse_set_lengths(overrides: list[str]) -> Dict[str, int]:
     parsed: Dict[str, int] = {}
     for entry in overrides:
@@ -109,7 +128,13 @@ def format_metadata_line(label: str, value: Optional[str]) -> str:
     return f"- {label}: {display}"
 
 
-def render_markdown(output_path: Path, generated, generated_at: datetime) -> None:
+def render_markdown(
+    output_path: Path,
+    generated,
+    generated_at: datetime,
+    *,
+    sections: Optional[Sequence[Tuple[str, Sequence[SongDisplay]]]] = None,
+) -> None:
     lines = ["# Generated Setlist", ""]
 
     metadata = generated.metadata
@@ -121,16 +146,40 @@ def render_markdown(output_path: Path, generated, generated_at: datetime) -> Non
     lines.append(format_metadata_line("Year limit", str(metadata.year) if metadata.year else "Full run"))
     lines.append("")
 
+    section_lookup: Dict[str, Sequence[SongDisplay]] = {}
+    if sections:
+        for title, tracks in sections:
+            section_lookup[title] = tracks
+
+    def section_tracks(label: str, fallback_songs: Sequence[str]) -> Sequence[SongDisplay]:
+        rows = section_lookup.get(label)
+        if rows:
+            return rows
+        return [SongDisplay(title=song, mp3_url=None, duration_seconds=None, origin=None) for song in fallback_songs]
+
     for segment in generated.sets:
         lines.append(f"## {segment.label}")
-        for idx, song in enumerate(segment.songs, start=1):
-            lines.append(f"{idx}. {song}")
+        rows = section_tracks(segment.label, segment.songs)
+        for idx, song in enumerate(rows, start=1):
+            display = song.title
+            if song.duration_label:
+                display = f"{display} [{song.duration_label}]"
+            lines.append(f"{idx}. {display}")
+            if song.origin:
+                lines.append(f"   *{song.origin}*")
         lines.append("")
 
     if generated.encore:
         lines.append("## Encore")
-        for idx, song in enumerate(generated.encore.songs, start=1):
-            lines.append(f"{idx}. {song}")
+        encore_label = generated.encore.label if generated.encore else "Encore"
+        rows = section_tracks(encore_label, generated.encore.songs if generated.encore else [])
+        for idx, song in enumerate(rows, start=1):
+            display = song.title
+            if song.duration_label:
+                display = f"{display} [{song.duration_label}]"
+            lines.append(f"{idx}. {display}")
+            if song.origin:
+                lines.append(f"   *{song.origin}*")
         lines.append("")
 
     if metadata.notes:
@@ -153,6 +202,27 @@ def split_song_titles(raw_title: str) -> Iterable[str]:
         stripped = part.strip()
         if stripped:
             yield stripped
+
+
+def determine_origin(track: Dict) -> Optional[str]:
+    """Derive human-readable origin text from track metadata."""
+
+    song_info = track.get("song") or {}
+    if song_info.get("original"):
+        return "Phish original"
+
+    artist = song_info.get("artist") or track.get("artist")
+    if artist:
+        normalized = artist.strip()
+        if normalized.lower() == "phish":
+            return "Phish original"
+        return f"Originally by {normalized}"
+
+    alias = song_info.get("alias")
+    if alias:
+        return f"Alias: {alias}"
+
+    return None
 
 
 def populate_slug_cache(session: requests.Session, slug_cache: Dict[str, Optional[str]]) -> None:
@@ -199,10 +269,10 @@ def fetch_song_slug(title: str, session: requests.Session, slug_cache: Dict[str,
 def fetch_track_for_song(
     title: str,
     session: requests.Session,
-    track_cache: Dict[str, Optional[Dict]],
+    track_cache: Dict[str, Optional[SongDisplay]],
     slug_cache: Dict[str, Optional[str]],
     rng: Random,
-) -> Optional[Dict]:
+) -> Optional[SongDisplay]:
     key = normalize_title(title)
     if key in track_cache:
         return track_cache[key]
@@ -232,11 +302,25 @@ def fetch_track_for_song(
         if track.get("mp3_url") and track.get("audio_status") in {"complete", "partial"}
     ]
     track = rng.choice(candidates) if candidates else None
-    if track and track.get("mp3_url"):
-        track_cache[key] = track
-    else:
+    if track is None and tracks:
+        track = tracks[0]
+    if not track:
         track_cache[key] = None
-    return track_cache[key]
+        return None
+
+    duration_ms = track.get("duration")
+    duration_seconds = int(duration_ms // 1000) if isinstance(duration_ms, (int, float)) else None
+    origin_text = determine_origin(track)
+
+    song_display = SongDisplay(
+        title=title,
+        mp3_url=track.get("mp3_url"),
+        duration_seconds=duration_seconds if duration_seconds is not None and duration_seconds >= 0 else None,
+        origin=origin_text,
+        show_date=track.get("show_date"),
+    )
+    track_cache[key] = song_display
+    return song_display
 
 
 def build_playlist(
@@ -246,27 +330,28 @@ def build_playlist(
     encore,
     metadata,
     rng: Random,
-) -> Tuple[Path, Sequence[Tuple[str, Sequence[Tuple[str, Optional[str]]]]], Optional[str]]:
+    *,
+    create_playlist_file: bool,
+) -> Tuple[Optional[Path], List[Tuple[str, List[SongDisplay]]], Optional[str]]:
     session = requests.Session()
-    track_cache: Dict[str, Optional[Dict]] = {}
+    track_cache: Dict[str, Optional[SongDisplay]] = {}
     slug_cache: Dict[str, Optional[str]] = {}
     missing: Dict[str, int] = {}
-    playlist_lines = ["#EXTM3U"]
+    playlist_lines: List[str] = ["#EXTM3U"]
 
     def append_track(song_title: str) -> None:
         normalized = normalize_title(song_title)
         track = fetch_track_for_song(song_title, session, track_cache, slug_cache, rng)
-        if not track or not track.get("mp3_url"):
+        if not track or not track.mp3_url:
             missing[song_title] = missing.get(song_title, 0) + 1
             playlist_lines.append(f"#EXTINF:-1,{song_title} (unavailable)")
             playlist_lines.append(f"# Missing: {song_title}")
             return
 
-        duration_ms = track.get("duration") or -1000
-        duration_sec = int(duration_ms // 1000) if duration_ms >= 0 else -1
-        show_date = track.get("show_date", "unknown date")
+        duration_sec = track.duration_seconds if track.duration_seconds is not None else -1
+        show_date = track.show_date or "unknown date"
         playlist_lines.append(f"#EXTINF:{duration_sec},{song_title} [{show_date}]")
-        playlist_lines.append(track["mp3_url"])
+        playlist_lines.append(track.mp3_url)
 
     for segment in segments:
         for raw_song in segment.songs:
@@ -278,38 +363,58 @@ def build_playlist(
             for title in split_song_titles(raw_song):
                 append_track(title)
 
-    output_dir = base_path / "data"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    playlist_path = output_dir / f"playlist_{timestamp}.m3u"
-    playlist_path.write_text("\n".join(playlist_lines), encoding="utf-8")
+    playlist_path: Optional[Path] = None
+    if create_playlist_file:
+        output_dir = base_path / "data"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        playlist_path = output_dir / f"playlist_{timestamp}.m3u"
+        playlist_path.write_text("\n".join(playlist_lines), encoding="utf-8")
 
-    html_sections: list[Tuple[str, list[Tuple[str, Optional[str]]]]] = []
+    html_sections: List[Tuple[str, List[SongDisplay]]] = []
     first_track_url: Optional[str] = None
 
     for segment in segments:
-        rows: list[Tuple[str, Optional[str]]] = []
+        rows: List[SongDisplay] = []
         for raw_song in segment.songs:
             for title in split_song_titles(raw_song):
                 track = track_cache.get(normalize_title(title))
-                url = track.get("mp3_url") if track else None
-                if url and not first_track_url:
-                    first_track_url = url
-                rows.append((title, url))
+                if track and track.mp3_url and not first_track_url:
+                    first_track_url = track.mp3_url
+                rows.append(
+                    SongDisplay(
+                        title=title,
+                        mp3_url=track.mp3_url if track else None,
+                        duration_seconds=track.duration_seconds if track else None,
+                        origin=track.origin if track else None,
+                        show_date=track.show_date if track else None,
+                    )
+                )
         html_sections.append((segment.label, rows))
 
     if encore:
-        rows: list[Tuple[str, Optional[str]]] = []
+        rows: List[SongDisplay] = []
         for raw_song in encore.songs:
             for title in split_song_titles(raw_song):
                 track = track_cache.get(normalize_title(title))
-                url = track.get("mp3_url") if track else None
-                if url and not first_track_url:
-                    first_track_url = url
-                rows.append((title, url))
+                if track and track.mp3_url and not first_track_url:
+                    first_track_url = track.mp3_url
+                rows.append(
+                    SongDisplay(
+                        title=title,
+                        mp3_url=track.mp3_url if track else None,
+                        duration_seconds=track.duration_seconds if track else None,
+                        origin=track.origin if track else None,
+                        show_date=track.show_date if track else None,
+                    )
+                )
         html_sections.append((encore.label, rows))
 
-    for title in missing:
-        metadata.notes.append(f"Playlist missing audio for {title} on phish.in")
+    if create_playlist_file:
+        for title in missing:
+            metadata.notes.append(f"Playlist missing audio for {title} on phish.in")
+
+    if not create_playlist_file:
+        first_track_url = None
 
     return playlist_path, html_sections, first_track_url
 
@@ -354,35 +459,40 @@ def main() -> None:
     extension = "html" if args.html else "md"
     output_path = output_dir / f"setlist_{timestamp}.{extension}"
 
-    playlist_path: Optional[Path] = None
-    playlist_sections: Optional[Sequence[Tuple[str, Sequence[Tuple[str, Optional[str]]]]]] = None
-    first_track_url: Optional[str] = None
+    playlist_path: Optional[Path]
+    playlist_sections_data: List[Tuple[str, List[SongDisplay]]]
+    first_track_url: Optional[str]
 
-    if args.playlist:
-        playlist_path, playlist_sections, first_track_url = build_playlist(
-            PROJECT_ROOT,
-            timestamp,
-            generated.sets,
-            generated.encore,
-            generated.metadata,
-            rng,
-        )
+    playlist_path, playlist_sections_data, first_track_url = build_playlist(
+        PROJECT_ROOT,
+        timestamp,
+        generated.sets,
+        generated.encore,
+        generated.metadata,
+        rng,
+        create_playlist_file=args.playlist,
+    )
 
     def render_html_output(path: Path, include_playlist: bool) -> None:
-        sections = None
         playlist_file = playlist_path if include_playlist else None
         track_url = first_track_url if include_playlist else None
 
-        if playlist_sections is not None:
+        sections: Optional[List[PlaylistSection]] = None
+        if playlist_sections_data:
             sections = [
                 PlaylistSection(
                     title=section_title,
                     tracks=[
-                        PlaylistLink(title=title, mp3_url=url if include_playlist else None)
-                        for title, url in rows
+                        PlaylistLink(
+                            title=song.title,
+                            mp3_url=song.mp3_url if include_playlist else None,
+                            duration=song.duration_label,
+                            origin=song.origin,
+                        )
+                        for song in rows
                     ],
                 )
-                for section_title, rows in playlist_sections
+                for section_title, rows in playlist_sections_data
             ]
 
         render_html_report(
@@ -395,13 +505,13 @@ def main() -> None:
         )
 
     if args.playlist:
-        render_markdown(output_path, generated, now_utc)
+        render_markdown(output_path, generated, now_utc, sections=playlist_sections_data)
         html_output = output_path.with_suffix(".html")
         render_html_output(html_output, include_playlist=True)
     elif args.html:
         render_html_output(output_path, include_playlist=False)
     else:
-        render_markdown(output_path, generated, now_utc)
+        render_markdown(output_path, generated, now_utc, sections=playlist_sections_data)
 
     message = f"Wrote setlist to {output_path} (seed={seed_value})"
     if playlist_path:

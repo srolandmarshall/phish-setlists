@@ -16,6 +16,8 @@ class PlaylistLink:
 
     title: str
     mp3_url: Optional[str] = None
+    duration: Optional[str] = None
+    origin: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -49,14 +51,25 @@ def _render_context(generated: GeneratedSetlist, generated_at: datetime) -> str:
 def _render_section(section: PlaylistSection, include_links: bool) -> str:
     rows = []
     for link in section.tracks:
+        display_title = link.title
+        if link.duration:
+            display_title = f"{display_title} [{link.duration}]"
+
+        cell_parts = []
         if include_links and link.mp3_url:
-            rows.append(
-                f"            <li><a href=\"#\" data-audio-url=\"{link.mp3_url}\">{link.title}</a></li>"
+            cell_parts.append(
+                f"<a href=\"#\" data-audio-url=\"{link.mp3_url}\">{display_title}</a>"
             )
         elif link.mp3_url and not include_links:
-            rows.append(f"            <li><a href=\"{link.mp3_url}\">{link.title}</a></li>")
+            cell_parts.append(f"<a href=\"{link.mp3_url}\">{display_title}</a>")
         else:
-            rows.append(f"            <li>{link.title}</li>")
+            cell_parts.append(display_title)
+
+        if link.origin:
+            cell_parts.append(f"<div class=\"song-origin\"><em>{link.origin}</em></div>")
+
+        rows.append(f"            <li>{''.join(cell_parts)}</li>")
+
     body = "\n".join(rows)
     return (
         "      <section class=\"card\">\n"
@@ -199,6 +212,7 @@ def render_html(
         "    audio { width: 100%; }\n",
         "    a { color: #0b7285; text-decoration: none; }\n",
         "    a:hover { text-decoration: underline; }\n",
+        "    .song-origin { display: block; margin-top: 0.25rem; font-size: 0.9em; color: #495057; }\n",
         "  </style>\n",
         "</head>\n",
         "<body>\n",

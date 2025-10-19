@@ -14,6 +14,8 @@ from .core import GeneratedSetlist, SetSegment
 class PlaylistLink:
     title: str
     mp3_url: Optional[str] = None
+    duration: Optional[str] = None
+    origin: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -91,14 +93,25 @@ def render_html_report(
     def render_section(section: PlaylistSection) -> str:
         rows = []
         for link in section.tracks:
+            display_title = link.title
+            if link.duration:
+                display_title = f"{display_title} [{link.duration}]"
+
+            cell_parts = []
             if include_links and link.mp3_url:
-                rows.append(
-                    f"      <tr><td><a href=\"#\" data-audio-url=\"{link.mp3_url}\">{link.title}</a></td></tr>"
+                cell_parts.append(
+                    f"<a href=\"#\" data-audio-url=\"{link.mp3_url}\">{display_title}</a>"
                 )
             elif link.mp3_url:
-                rows.append(f"      <tr><td><a href=\"{link.mp3_url}\">{link.title}</a></td></tr>")
+                cell_parts.append(f"<a href=\"{link.mp3_url}\">{display_title}</a>")
             else:
-                rows.append(f"      <tr><td>{link.title}</td></tr>")
+                cell_parts.append(display_title)
+
+            if link.origin:
+                cell_parts.append(f"<div class=\"song-origin\"><em>{link.origin}</em></div>")
+
+            rows.append(f"      <tr><td>{''.join(cell_parts)}</td></tr>")
+
         body = "\n".join(rows)
         return (
             "<table class=\"set-table\">\n"
@@ -141,6 +154,7 @@ def render_html_report(
         "    .set-table td, .set-table th { padding: 0.55rem 0.75rem; border-bottom: 1px solid #dee2e6; }",
         "    .set-table tr:last-child td { border-bottom: none; }",
         "    .notes ul { margin: 0; padding-left: 1.25rem; }",
+        "    .song-origin { margin-top: 0.25rem; font-size: 0.9em; color: #495057; }",
         "    audio { width: 100%; margin-top: 0.5rem; }",
         "    a { color: #0b7285; text-decoration: none; }",
         "    a:hover { text-decoration: underline; }",
