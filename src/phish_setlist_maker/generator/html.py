@@ -39,7 +39,7 @@ def _render_context(generated: GeneratedSetlist, generated_at: datetime) -> str:
     ]
     rows = "\n".join(f"          <li>{value}</li>" for value in items)
     return (
-        "      <section class=\"card\">\n"
+        '      <section class="card">\n'
         "        <h2>Context</h2>\n"
         "        <ul>\n"
         f"{rows}\n"
@@ -58,21 +58,21 @@ def _render_section(section: PlaylistSection, include_links: bool) -> str:
         cell_parts = []
         if include_links and link.mp3_url:
             cell_parts.append(
-                f"<a href=\"#\" data-audio-url=\"{link.mp3_url}\">{display_title}</a>"
+                f'<a href="#" data-audio-url="{link.mp3_url}">{display_title}</a>'
             )
         elif link.mp3_url and not include_links:
-            cell_parts.append(f"<a href=\"{link.mp3_url}\">{display_title}</a>")
+            cell_parts.append(f'<a href="{link.mp3_url}">{display_title}</a>')
         else:
             cell_parts.append(display_title)
 
         if link.origin:
-            cell_parts.append(f"<div class=\"song-origin\"><em>{link.origin}</em></div>")
+            cell_parts.append(f'<div class="song-origin"><em>{link.origin}</em></div>')
 
         rows.append(f"            <li>{''.join(cell_parts)}</li>")
 
     body = "\n".join(rows)
     return (
-        "      <section class=\"card\">\n"
+        '      <section class="card">\n'
         f"        <h2>{section.title}</h2>\n"
         "        <ol>\n"
         f"{body}\n"
@@ -84,7 +84,7 @@ def _render_section(section: PlaylistSection, include_links: bool) -> str:
 def _render_notes(notes: Iterable[str]) -> str:
     rows = "\n".join(f"          <li>{note}</li>" for note in notes)
     return (
-        "      <section class=\"card\">\n"
+        '      <section class="card">\n'
         "        <h2>Notes</h2>\n"
         "        <ul>\n"
         f"{rows}\n"
@@ -96,13 +96,13 @@ def _render_notes(notes: Iterable[str]) -> str:
 def _render_player(m3u_path: Path, first_track_url: Optional[str]) -> str:
     audio_src = first_track_url or m3u_path.name
     return (
-        "      <section class=\"card\">\n"
+        '      <section class="card">\n'
         "        <h2>Playlist</h2>\n"
-        f"        <audio id=\"playlist-player\" controls autoplay preload=\"none\" src=\"{audio_src}\">\n"
+        f'        <audio id="playlist-player" controls autoplay preload="none" src="{audio_src}">\n'
         "          Your browser does not support the audio element.\n"
         "        </audio>\n"
         "        <p>\n"
-        f"          <a href=\"{m3u_path.name}\" download>Download M3U playlist</a>\n"
+        f'          <a href="{m3u_path.name}" download>Download M3U playlist</a>\n'
         "        </p>\n"
         "      </section>\n"
     )
@@ -134,19 +134,26 @@ def _build_playlist_sections(
     encore_links: Optional[Sequence[PlaylistLink]],
 ) -> Iterable[PlaylistSection]:
     if links:
+        # If the caller supplied custom playlist sections (links), assume they
+        # include any encore section they want. Don't auto-append another
+        # encore to avoid duplication.
         yield from links
+        return
     else:
         for segment in segments:
             yield PlaylistSection(
                 title=segment.label,
                 tracks=[PlaylistLink(title=song) for song in segment.songs],
             )
+
     if encore:
         encore_section = PlaylistSection(
             title=encore.label,
-            tracks=encore_links
-            if encore_links is not None
-            else [PlaylistLink(title=song) for song in encore.songs],
+            tracks=(
+                encore_links
+                if encore_links is not None
+                else [PlaylistLink(title=song) for song in encore.songs]
+            ),
         )
         yield encore_section
 
@@ -174,46 +181,60 @@ def render_html(
 
     include_playlist_links = playlist_path is not None
 
-    body_parts = [
-        "    <main>\n",
-        _render_context(generated, generated_at),
-    ]
-
+    # Layout: top row (Context + optional Playlist), sets row (N columns), notes row (full width)
+    top_row = []
+    top_row.append(_render_context(generated, generated_at))
     if playlist_path:
-        body_parts.append(_render_player(playlist_path, first_track_url))
+        top_row.append(_render_player(playlist_path, first_track_url))
 
+    # Determine how many columns the sets row should have: number of sections
+    # excluding Context/Playlist/Notes. We count only the musical sections.
+    sets_count = len(sections)
+    # If there's at least one set, choose columns: 3 for 1-3 sets, 4 for 4+, but
+    # the caller requested: 1/3 for 2+Encore, 1/4 for 3+Encore, etc. We'll
+    # map sets_count -> sets_cols = sets_count if sets_count >= 2 else 1
+    sets_cols = sets_count if sets_count >= 2 else 1
+
+    body = []
+    body.append(f"    <main>\n")
+
+    # Top row
+    if len(top_row) == 2:
+        body.append('      <div class="top-row two-cols">\n')
+        body.append(top_row[0])
+        body.append(top_row[1])
+        body.append("      </div>\n")
+    else:
+        body.append('      <div class="top-row one-col">\n')
+        body.append(top_row[0])
+        body.append("      </div>\n")
+
+    # Sets row: render all musical sections (sets + encore) in a grid
+    body.append(f'      <div class="sets-row" style="--sets-cols: {sets_cols};">\n')
     for section in sections:
-        body_parts.append(_render_section(section, include_links=include_playlist_links))
+        body.append(_render_section(section, include_links=include_playlist_links))
+    body.append("      </div>\n")
 
+    # Notes row (full width)
     if generated.metadata.notes:
-        body_parts.append(_render_notes(generated.metadata.notes))
+        body.append('      <div class="notes-row">\n')
+        body.append(_render_notes(generated.metadata.notes))
+        body.append("      </div>\n")
 
-    body_parts.append("    </main>\n")
+    body.append("    </main>\n")
+
     if playlist_path:
-        body_parts.append(_render_script())
+        body.append(_render_script())
+
+    body_parts = body
 
     html = [
         "<!DOCTYPE html>\n",
-        "<html lang=\"en\">\n",
+        '<html lang="en">\n',
         "<head>\n",
-        "  <meta charset=\"utf-8\" />\n",
+        '  <meta charset="utf-8" />\n',
         "  <title>Generated Setlist</title>\n",
-        "  <style>\n",
-        "    :root { color-scheme: light dark; --card-bg: rgba(255,255,255,0.85); --border: rgba(0,0,0,0.1); }\n",
-        "    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;\n",
-        "          margin: 0 auto; padding: 2rem; max-width: 960px; background: #f5f5f5; }\n",
-        "    h1 { margin-bottom: 1.5rem; text-align: center; }\n",
-        "    h2 { margin-top: 0; }\n",
-        "    main { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));\n",
-        "           gap: 1.5rem; }\n",
-        "    .card { background: var(--card-bg); border-radius: 12px; padding: 1.2rem; box-shadow: 0 8px 24px rgba(0,0,0,0.08);\n",
-        "            border: 1px solid var(--border); display: flex; flex-direction: column; gap: 0.75rem; }\n",
-        "    ul, ol { margin: 0; padding-left: 1.25rem; }\n",
-        "    audio { width: 100%; }\n",
-        "    a { color: #0b7285; text-decoration: none; }\n",
-        "    a:hover { text-decoration: underline; }\n",
-        "    .song-origin { display: block; margin-top: 0.25rem; font-size: 0.9em; color: #495057; }\n",
-        "  </style>\n",
+        '  <link rel="stylesheet" href="phish-setlist.css">\n',
         "</head>\n",
         "<body>\n",
         "  <h1>Generated Setlist</h1>\n",
@@ -223,4 +244,15 @@ def render_html(
     ]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Ensure output dir exists and write the CSS file next to the generated HTML so the link works
+    css_source = Path(__file__).with_name("phish-setlist.css")
+    css_target = output_path.parent / css_source.name
+    try:
+        css_text = css_source.read_text(encoding="utf-8")
+        css_target.write_text(css_text, encoding="utf-8")
+    except Exception:
+        # If we can't copy the stylesheet for any reason, continue and still write the HTML
+        pass
+
     output_path.write_text("".join(html), encoding="utf-8")
