@@ -53,14 +53,12 @@ Generated artifacts land in the `data/` directory by default (HTML, M3U, markdow
 
 - `scripts/` — thin CLI scripts (e.g., `generate_setlist.py`)
 - `src/phish_setlist_maker/` — core package
-	- `generator/` — setlist generation logic, rules, and HTML renderers
-	- `models/` — SQLAlchemy models for shows, tracks, songs, venues, etc.
-	- `db.py` — DB helpers and connection wiring
-	- `config.py` / `constants.py` — configuration values
+  - `generator/` — setlist generation logic, rules, and HTML renderers
+  - `models/` — SQLAlchemy models for shows, tracks, songs, venues, etc.
+  - `db.py` — DB helpers and connection wiring
+  - `config.py` / `constants.py` — configuration values
 - `notebooks/` — interactive notebooks used during exploration
 - `data/` — generated output and local SQL dumps (not all files are tracked in git)
-
-See `AGENTS.md` for repo conventions and notes about testing, formatting, and change requests.
 
 ## Development notes
 
