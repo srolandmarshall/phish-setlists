@@ -67,11 +67,21 @@ def filter_shows_query(
     return query
 
 
-def previous_show_tracks(session: Session, reference_date: date) -> List[str]:
+def previous_show_tracks(
+    session: Session,
+    reference_date: date,
+    *,
+    era: Optional[str] = None,
+    year: Optional[int] = None,
+) -> List[str]:
     """Return titles from the show immediately preceding ``reference_date``."""
 
     show_stmt = (
-        select(Show)
+        filter_shows_query(
+            cutoff_date=reference_date,
+            era=era,
+            year=year,
+        )
         .where(Show.date < reference_date)
         .order_by(Show.date.desc())
         .limit(1)
@@ -272,14 +282,22 @@ EncoreStatistics = SegmentStatistics
 EncorePattern = SegmentPattern
 
 
-def songs_seen_by_date(session: Session, cutoff: date) -> Iterable[str]:
+def songs_seen_by_date(
+    session: Session,
+    cutoff: date,
+    *,
+    era: Optional[str] = None,
+    year: Optional[int] = None,
+) -> Iterable[str]:
     """Return the set of song titles that have appeared up to ``cutoff``."""
 
-    track_stmt = (
-        select(Track.title)
-        .join(Show, Track.show_id == Show.id)
-        .where(Show.date <= cutoff)
-    )
+    show_ids = filter_shows_query(
+        cutoff_date=cutoff,
+        era=era,
+        year=year,
+    ).subquery()
+
+    track_stmt = select(Track.title).join(show_ids, Track.show_id == show_ids.c.id)
     return {row[0] for row in session.execute(track_stmt)}
 
 

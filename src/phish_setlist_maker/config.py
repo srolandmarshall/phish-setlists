@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
+from sqlalchemy.engine import URL
 
 load_dotenv()
 
@@ -21,10 +22,15 @@ class DatabaseSettings:
     name: str = "phish-setlist-maker"
 
     def url(self) -> str:
-        return (
-            f"postgresql+psycopg2://{self.user}:{self.password}"
-            f"@{self.host}:{self.port}/{self.name}"
+        url = URL.create(
+            "postgresql+psycopg2",
+            username=self.user,
+            password=self.password,
+            host=self.host,
+            port=self.port,
+            database=self.name,
         )
+        return url.render_as_string(hide_password=False)
 
 
 def get_database_settings() -> DatabaseSettings:

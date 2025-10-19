@@ -54,11 +54,18 @@ class GeneratedSetlist:
 class SetlistGenerator:
     """Generate Phish setlists from historical performance data."""
 
-    def __init__(self, session: Session, rng: Optional[Random] = None):
+    def __init__(
+        self,
+        session: Session,
+        rng: Optional[Random] = None,
+        *,
+        adjacency_bonus: float = 0.3,
+        adjacency_min_support: int = 2,
+    ):
         self.session = session
         self.rng = rng or Random()
-        self._adjacency_bonus = 0.0
-        self._adjacency_min_support = 0
+        self._adjacency_bonus = max(0.0, adjacency_bonus)
+        self._adjacency_min_support = max(0, adjacency_min_support)
 
     def generate(
         self,
@@ -101,10 +108,27 @@ class SetlistGenerator:
         previous_show_songs: Set[str] = set()
         previous_show_date: Optional[date] = None
         if exclude_previous_show:
-            previous_show_songs = set(previous_show_tracks(self.session, reference))
-            previous_show_date = self._previous_show_date(reference)
+            exclusion_reference = cutoff
+            previous_show_songs = set(
+                previous_show_tracks(
+                    self.session,
+                    exclusion_reference,
+                    era=era,
+                    year=year,
+                )
+            )
+            previous_show_date = self._previous_show_date(
+                exclusion_reference,
+                era=era,
+                year=year,
+            )
 
-        seen_songs = songs_seen_by_date(self.session, cutoff)
+        seen_songs = songs_seen_by_date(
+            self.session,
+            cutoff,
+            era=era,
+            year=year,
+        )
 
         frequencies_by_set = song_frequencies_by_set(
             self.session,
@@ -152,7 +176,7 @@ class SetlistGenerator:
             set_stats = segment_stats_map.get(canonical_set)
             set_longform = segment_longform_titles.get(canonical_set, set())
 
-            adjacency_map = None
+            adjacency_map = set_stats.adjacency_map if set_stats else None
 
             set_songs, set_notes = self._compose_segment(
                 canonical_set=canonical_set,
@@ -175,7 +199,7 @@ class SetlistGenerator:
             desired_encore = lengths.get("encore", DEFAULT_SET_LENGTHS["encore"])
             encore_stats = segment_stats_map.get("encore")
             encore_longform = segment_longform_titles.get("encore", set())
-            encore_adjacency = None
+            encore_adjacency = encore_stats.adjacency_map if encore_stats else None
 
             encore_songs, encore_notes = self._compose_segment(
                 canonical_set="encore",
@@ -219,13 +243,25 @@ class SetlistGenerator:
             raise RuntimeError("No shows available in database.")
         return latest
 
-    def _previous_show_date(self, reference: date) -> Optional[date]:
-        stmt = (
-            select(Show.date)
-            .where(Show.date < reference)
-            .order_by(Show.date.desc())
-            .limit(1)
-        )
+    def _previous_show_date(
+        self,
+        reference: date,
+        *,
+        era: Optional[str],
+        year: Optional[int],
+    ) -> Optional[date]:
+        stmt = select(Show.date).where(Show.date < reference)
+
+        if year:
+            year_end = date(year, 12, 31)
+            upper_bound = min(year_end, reference)
+            stmt = stmt.where(Show.date <= upper_bound)
+
+        if era and era in ERA_DEFINITIONS:
+            era_def = ERA_DEFINITIONS[era]
+            stmt = stmt.where(Show.date >= era_def.start, Show.date <= era_def.end)
+
+        stmt = stmt.order_by(Show.date.desc()).limit(1)
         return self.session.execute(stmt).scalar_one_or_none()
 
     def _compose_segment(
