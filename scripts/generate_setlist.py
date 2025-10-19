@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 import re
 from random import Random, SystemRandom
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Dict, Iterable, Optional, Sequence, Tuple
 
 import requests
 import sys
@@ -20,10 +20,8 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from phish_setlist_maker.db import session_scope  # noqa: E402
-from phish_setlist_maker.generator import (  # noqa: E402
-    SetlistGenerator,
-    random_set_lengths,
-)
+from phish_setlist_maker.generator import SetlistGenerator, random_set_lengths  # noqa: E402
+from phish_setlist_maker.generator.html_basic import PlaylistLink, PlaylistSection, render_html_report  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -145,127 +143,6 @@ def render_markdown(output_path: Path, generated, generated_at: datetime) -> Non
     output_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def render_html(
-    output_path: Path,
-    generated,
-    generated_at: datetime,
-    playlist: Optional[Path] = None,
-    playlist_segments: Optional[Iterable[Tuple[str, Iterable[Tuple[str, Optional[str]]]]]] = None,
-    playlist_encore: Optional[Iterable[Tuple[str, Optional[str]]]] = None,
-    first_track_url: Optional[str] = None,
-) -> None:
-    metadata = generated.metadata
-
-    parts = [
-        "<!DOCTYPE html>",
-        "<html lang=\"en\">",
-        "<head>",
-        "  <meta charset=\"utf-8\" />",
-        "  <title>Generated Setlist</title>",
-        "  <style>",
-        "    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 2rem; line-height: 1.5; }",
-        "    h1, h2 { color: #2a2a2a; }",
-        "    ol { padding-left: 1.5rem; }",
-        "    .segment { margin-bottom: 1.5rem; }",
-        "    .notes ul { list-style: disc; margin-left: 1.5rem; }",
-        "  </style>",
-        "</head>",
-        "<body>",
-        "  <h1>Generated Setlist</h1>",
-        "  <section>",
-        "    <h2>Context</h2>",
-        "    <ul>",
-        f"      <li>Generated at: {generated_at.isoformat(timespec='seconds')}</li>",
-        f"      <li>Reference date: {metadata.reference_date}</li>",
-        f"      <li>Cutoff date: {metadata.cutoff_date}</li>",
-        f"      <li>Era: {metadata.era or 'All history'}</li>",
-        f"      <li>Year limit: {metadata.year if metadata.year else 'Full run'}</li>",
-        "    </ul>",
-        "  </section>",
-    ]
-
-    if playlist:
-        playlist_rel = playlist.name
-        audio_src = first_track_url or playlist_rel
-        parts.append("  <section class=\"player\">")
-        parts.append("    <h2>Playlist</h2>")
-        parts.append(f"    <audio id=\"playlist-player\" controls autoplay preload=\"none\" src=\"{audio_src}\">")
-        parts.append("      Your browser does not support the audio element.")
-        parts.append("    </audio>")
-        parts.append("    <p>")
-        parts.append(f"      <a href=\"{playlist_rel}\" download>Download M3U playlist</a>")
-        parts.append("    </p>")
-        parts.append("  </section>")
-
-    if playlist_segments is None:
-        iterable_segments = [(segment.label, [(song, None) for song in segment.songs]) for segment in generated.sets]
-    else:
-        iterable_segments = playlist_segments
-
-    for label, songs in iterable_segments:
-        parts.append("  <section class=\"segment\">")
-        parts.append(f"    <h2>{label}</h2>")
-        parts.append("    <ol>")
-        for title, url in songs:
-            if playlist and url:
-                parts.append(f"      <li><a href=\"#\" data-audio-url=\"{url}\">{title}</a></li>")
-            elif url:
-                parts.append(f"      <li><a href=\"{url}\">{title}</a></li>")
-            else:
-                parts.append(f"      <li>{title}</li>")
-        parts.append("    </ol>")
-        parts.append("  </section>")
-
-    encore_rows = playlist_encore
-    if encore_rows is None and generated.encore:
-        encore_rows = [(song, None) for song in generated.encore.songs]
-
-    if encore_rows:
-        parts.append("  <section class=\"segment\">")
-        parts.append("    <h2>Encore</h2>")
-        parts.append("    <ol>")
-        for title, url in encore_rows:
-            if playlist and url:
-                parts.append(f"      <li><a href=\"#\" data-audio-url=\"{url}\">{title}</a></li>")
-            elif url:
-                parts.append(f"      <li><a href=\"{url}\">{title}</a></li>")
-            else:
-                parts.append(f"      <li>{title}</li>")
-        parts.append("    </ol>")
-        parts.append("  </section>")
-
-    if metadata.notes:
-        parts.append("  <section class=\"notes\">")
-        parts.append("    <h2>Notes</h2>")
-        parts.append("    <ul>")
-        for note in metadata.notes:
-            parts.append(f"      <li>{note}</li>")
-        parts.append("    </ul>")
-        parts.append("  </section>")
-
-    if playlist:
-        parts.append("  <script>")
-        parts.append("    const player = document.getElementById('playlist-player');")
-        parts.append("    if (player) {")
-        parts.append("      document.querySelectorAll('a[data-audio-url]').forEach(link => {")
-        parts.append("        link.addEventListener('click', event => {")
-        parts.append("          event.preventDefault();")
-        parts.append("          const url = link.getAttribute('data-audio-url');")
-        parts.append("          if (!url) return;")
-        parts.append("          player.src = url;")
-        parts.append("          player.play().catch(() => {});")
-        parts.append("        });")
-        parts.append("      });")
-        parts.append("    }")
-        parts.append("  </script>")
-
-    parts.append("</body>")
-    parts.append("</html>")
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text("\n".join(parts), encoding="utf-8")
-
-
 def normalize_title(title: str) -> str:
     return re.sub(r"[^a-z0-9]", "", title.lower())
 
@@ -324,6 +201,7 @@ def fetch_track_for_song(
     session: requests.Session,
     track_cache: Dict[str, Optional[Dict]],
     slug_cache: Dict[str, Optional[str]],
+    rng: Random,
 ) -> Optional[Dict]:
     key = normalize_title(title)
     if key in track_cache:
@@ -336,8 +214,8 @@ def fetch_track_for_song(
 
     params = {
         "song_slug": slug,
-        "per_page": 1,
-        "sort": "date:desc",
+        "per_page": 30,
+        "sort": "likes_count:desc",
         "audio_status": "complete_or_partial",
     }
     try:
@@ -348,7 +226,12 @@ def fetch_track_for_song(
         return None
 
     tracks = resp.json().get("tracks", [])
-    track = tracks[0] if tracks else None
+    candidates = [
+        track
+        for track in tracks
+        if track.get("mp3_url") and track.get("audio_status") in {"complete", "partial"}
+    ]
+    track = rng.choice(candidates) if candidates else None
     if track and track.get("mp3_url"):
         track_cache[key] = track
     else:
@@ -362,7 +245,8 @@ def build_playlist(
     segments,
     encore,
     metadata,
-) -> Tuple[Path, Iterable[Tuple[str, Iterable[Tuple[str, Optional[str]]]]], Optional[Iterable[Tuple[str, Optional[str]]]], Optional[str]]:
+    rng: Random,
+) -> Tuple[Path, Sequence[Tuple[str, Sequence[Tuple[str, Optional[str]]]]], Optional[str]]:
     session = requests.Session()
     track_cache: Dict[str, Optional[Dict]] = {}
     slug_cache: Dict[str, Optional[str]] = {}
@@ -371,7 +255,7 @@ def build_playlist(
 
     def append_track(song_title: str) -> None:
         normalized = normalize_title(song_title)
-        track = fetch_track_for_song(song_title, session, track_cache, slug_cache)
+        track = fetch_track_for_song(song_title, session, track_cache, slug_cache, rng)
         if not track or not track.get("mp3_url"):
             missing[song_title] = missing.get(song_title, 0) + 1
             playlist_lines.append(f"#EXTINF:-1,{song_title} (unavailable)")
@@ -399,11 +283,11 @@ def build_playlist(
     playlist_path = output_dir / f"playlist_{timestamp}.m3u"
     playlist_path.write_text("\n".join(playlist_lines), encoding="utf-8")
 
-    html_segments = []
+    html_sections: list[Tuple[str, list[Tuple[str, Optional[str]]]]] = []
     first_track_url: Optional[str] = None
 
     for segment in segments:
-        rows = []
+        rows: list[Tuple[str, Optional[str]]] = []
         for raw_song in segment.songs:
             for title in split_song_titles(raw_song):
                 track = track_cache.get(normalize_title(title))
@@ -411,11 +295,10 @@ def build_playlist(
                 if url and not first_track_url:
                     first_track_url = url
                 rows.append((title, url))
-        html_segments.append((segment.label, rows))
+        html_sections.append((segment.label, rows))
 
-    html_encore = []
     if encore:
-        rows = []
+        rows: list[Tuple[str, Optional[str]]] = []
         for raw_song in encore.songs:
             for title in split_song_titles(raw_song):
                 track = track_cache.get(normalize_title(title))
@@ -423,12 +306,12 @@ def build_playlist(
                 if url and not first_track_url:
                     first_track_url = url
                 rows.append((title, url))
-        html_encore = rows
+        html_sections.append((encore.label, rows))
 
     for title in missing:
         metadata.notes.append(f"Playlist missing audio for {title} on phish.in")
 
-    return playlist_path, html_segments, html_encore, first_track_url
+    return playlist_path, html_sections, first_track_url
 
 
 def main() -> None:
@@ -471,36 +354,52 @@ def main() -> None:
     extension = "html" if args.html else "md"
     output_path = output_dir / f"setlist_{timestamp}.{extension}"
 
-    playlist_path = None
-    html_segments = None
-    html_encore = None
-    first_track_url = None
-    if args.playlist:
-        playlist_path, html_segments, html_encore, first_track_url = build_playlist(PROJECT_ROOT, timestamp, generated.sets, generated.encore, generated.metadata)
+    playlist_path: Optional[Path] = None
+    playlist_sections: Optional[Sequence[Tuple[str, Sequence[Tuple[str, Optional[str]]]]]] = None
+    first_track_url: Optional[str] = None
 
-    if args.playlist and not args.html:
-        # Re-render HTML alongside Markdown to expose the player.
+    if args.playlist:
+        playlist_path, playlist_sections, first_track_url = build_playlist(
+            PROJECT_ROOT,
+            timestamp,
+            generated.sets,
+            generated.encore,
+            generated.metadata,
+            rng,
+        )
+
+    def render_html_output(path: Path, include_playlist: bool) -> None:
+        sections = None
+        playlist_file = playlist_path if include_playlist else None
+        track_url = first_track_url if include_playlist else None
+
+        if playlist_sections is not None:
+            sections = [
+                PlaylistSection(
+                    title=section_title,
+                    tracks=[
+                        PlaylistLink(title=title, mp3_url=url if include_playlist else None)
+                        for title, url in rows
+                    ],
+                )
+                for section_title, rows in playlist_sections
+            ]
+
+        render_html_report(
+            output_path=path,
+            generated=generated,
+            generated_at=now_utc,
+            playlist_path=playlist_file,
+            first_track_url=track_url,
+            playlist_sections=sections,
+        )
+
+    if args.playlist:
         render_markdown(output_path, generated, now_utc)
         html_output = output_path.with_suffix(".html")
-        render_html(
-            html_output,
-            generated,
-            now_utc,
-            playlist=playlist_path,
-            playlist_segments=html_segments,
-            playlist_encore=html_encore,
-            first_track_url=first_track_url,
-        )
+        render_html_output(html_output, include_playlist=True)
     elif args.html:
-        render_html(
-            output_path,
-            generated,
-            now_utc,
-            playlist=playlist_path if args.playlist else None,
-            playlist_segments=html_segments,
-            playlist_encore=html_encore,
-            first_track_url=first_track_url,
-        )
+        render_html_output(output_path, include_playlist=False)
     else:
         render_markdown(output_path, generated, now_utc)
 
