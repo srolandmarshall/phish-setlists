@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+import logging
 from random import Random, SystemRandom
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -18,6 +19,9 @@ from ..generator import GeneratedSetlist, SetlistGenerator, random_set_lengths
 from ..generator.core import SetSegment
 from ..generator.html import PlaylistLink, PlaylistSection, build_html_markup
 from ..models import Show, Song, SongTrack, Track
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 class PlaylistServiceError(RuntimeError):
@@ -231,7 +235,7 @@ def build_song_catalog(db_session: Session) -> SongCatalog:
     return SongCatalog(by_title=by_title, by_slug=by_slug)
 
 
-def _query_tracks_for_song(db_session: Session, song_slug: str, limit: int = 30) -> List[CandidateTrack]:
+def _query_tracks_for_song(db_session: Session, song_slug: str, limit: int = 25) -> List[CandidateTrack]:
     stmt = (
         select(
             Track.id,
@@ -255,6 +259,7 @@ def _query_tracks_for_song(db_session: Session, song_slug: str, limit: int = 30)
             show_date=row.show_date,
         )
         for row in rows
+        if row.id is not None
     ]
 
 
@@ -268,17 +273,36 @@ def _fetch_remote_track_metadata(
     last_error: Optional[Exception] = None
 
     if track_id is not None:
+        logger.info(
+            "phish.in request endpoint=%s url=%s track_id=%s",
+            "tracks/{id}",
+            f"https://phish.in/api/v2/tracks/{track_id}.json",
+            track_id,
+        )
         url = f"https://phish.in/api/v2/tracks/{track_id}.json"
         try:
             resp = requests.get(url, timeout=10)
             resp.raise_for_status()
-            data = resp.json().get("track", {})
+            data = resp.json()
+            if isinstance(data, dict) and "track" in data:
+                data = data.get("track", {})
             mp3_url = data.get("mp3_url") or data.get("mp3")
             duration_raw = data.get("duration")
             duration_seconds = int(duration_raw // 1000) if isinstance(duration_raw, (int, float)) else None
             show_date = data.get("show_date")
             if mp3_url:
+                logger.info(
+                    "phish.in response endpoint=tracks/{id} status=%s mp3=%s",
+                    resp.status_code,
+                    bool(mp3_url),
+                )
                 return mp3_url, duration_seconds, show_date
+            else:
+                logger.warning(
+                    "phish.in response missing mp3_url endpoint=tracks/{id} status=%s track_id=%s",
+                    resp.status_code,
+                    track_id,
+                )
         except requests.RequestException as exc:
             last_error = exc
 
@@ -288,6 +312,12 @@ def _fetch_remote_track_metadata(
         "sort": "likes_count:desc",
         "audio_status": "complete_or_partial",
     }
+    logger.info(
+        "phish.in request endpoint=%s url=%s params=%s",
+        "tracks",
+        "https://phish.in/api/v2/tracks.json",
+        params,
+    )
     try:
         resp = requests.get("https://phish.in/api/v2/tracks.json", params=params, timeout=10)
         resp.raise_for_status()
@@ -298,6 +328,11 @@ def _fetch_remote_track_metadata(
 
     tracks = resp.json().get("tracks", [])
     candidates = [track for track in tracks if track.get("mp3_url")]
+    logger.info(
+        "phish.in response endpoint=tracks status=%s candidates=%s",
+        resp.status_code,
+        len(candidates),
+    )
     if not candidates:
         if strict and last_error is not None:
             raise PlaylistServiceError(f"Unable to fetch track metadata for track id '{track_id}'.") from last_error
@@ -327,8 +362,16 @@ def _select_track_display(
             raise PlaylistServiceError(f"No track recordings available for '{song_title}'.")
         return None
 
-    sample_size = min(len(candidates), 10)
-    selection = rng.choice(candidates[:sample_size])
+    sample_size = min(len(candidates), 25)
+    pool = candidates[:sample_size]
+    selection = rng.choice(pool)
+
+    logger.info(
+        "Selected local track candidate for %s track_id=%s slug=%s",
+        song_title,
+        selection.track_id,
+        selection.slug,
+    )
 
     mp3_url, remote_duration, remote_show_date = _fetch_remote_track_metadata(
         track_id=selection.track_id,
@@ -342,7 +385,13 @@ def _select_track_display(
             raise PlaylistServiceError(f"Track '{song_title}' lacks an accessible audio URL.")
         return None
 
-    duration_seconds = selection.duration if isinstance(selection.duration, int) and selection.duration > 0 else None
+    duration_seconds: Optional[int] = None
+    if isinstance(selection.duration, int) and selection.duration > 0:
+        duration_raw = selection.duration
+        if duration_raw > 6000:
+            duration_seconds = duration_raw // 1000
+        else:
+            duration_seconds = duration_raw
     if duration_seconds is None and isinstance(remote_duration, int) and remote_duration > 0:
         duration_seconds = remote_duration
 
