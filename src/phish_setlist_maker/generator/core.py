@@ -59,7 +59,7 @@ class SetlistGenerator:
         session: Session,
         rng: Optional[Random] = None,
         *,
-        adjacency_bonus: float = 0.3,
+        adjacency_bonus: float = 0.05,
         adjacency_min_support: int = 2,
     ):
         self.session = session
@@ -186,7 +186,7 @@ class SetlistGenerator:
                 stats=set_stats,
                 used_songs=used_songs,
                 eligible_songs=seen_songs,
-                allow_sequences=True,
+                allow_sequences=False,
                 allow_single_song=False,
                 longform_titles=set_longform,
                 adjacency_map=adjacency_map,
@@ -209,7 +209,7 @@ class SetlistGenerator:
                 stats=encore_stats,
                 used_songs=used_songs,
                 eligible_songs=seen_songs,
-                allow_sequences=True,
+                allow_sequences=False,
                 allow_single_song=True,
                 longform_titles=encore_longform,
                 adjacency_map=encore_adjacency,
@@ -285,18 +285,10 @@ class SetlistGenerator:
         max_length = desired_count if desired_count > 0 else None
 
         if allow_sequences and stats is not None and desired_count > 0:
-            sequence = self._choose_sequence(
-                stats=stats,
-                used_songs=used_songs,
-                eligible_songs=eligible_songs,
-                desired_length=desired_count,
-                max_length=max_length,
-            )
-            if sequence:
-                songs.extend(sequence)
-                used_songs.update(sequence)
+            remaining = max(0, desired_count - len(songs))
+        else:
+            remaining = desired_count
 
-        remaining = max(0, desired_count - len(songs))
         if remaining > 0:
             previous_song = songs[-1] if songs else None
             additional = self._pick_songs_for_set(

@@ -64,8 +64,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--allow-previous-show",
+        dest="allow_previous_show",
         action="store_true",
-        help="Allow songs from the previous show to be eligible (default excludes them).",
+        help="Allow songs from the previous show to be eligible (default).",
+    )
+    parser.add_argument(
+        "--exclude-previous-show",
+        dest="allow_previous_show",
+        action="store_false",
+        help="Exclude songs from the previous show.",
     )
     parser.add_argument(
         "--html",
@@ -84,6 +91,7 @@ def parse_args() -> argparse.Namespace:
         metavar="SET=COUNT",
         help="Override a set length (e.g., --set-length set1=11). Repeat as needed.",
     )
+    parser.set_defaults(allow_previous_show=None)
     return parser.parse_args()
 
 
@@ -177,6 +185,8 @@ def main() -> None:
 
     set_length_overrides = parse_set_lengths(args.set_length)
 
+    allow_previous_show = True if args.allow_previous_show is None else args.allow_previous_show
+
     request = GenerationRequest(
         reference_date=args.reference_date,
         era=args.era,
@@ -184,7 +194,7 @@ def main() -> None:
         num_sets=args.num_sets,
         include_encore=args.include_encore,
         set_lengths=set_length_overrides or None,
-        allow_previous_show=args.allow_previous_show,
+        allow_previous_show=allow_previous_show,
         seed=args.seed,
         include_playlist=args.playlist,
         include_html=False,

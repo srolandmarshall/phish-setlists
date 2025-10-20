@@ -94,7 +94,7 @@ class GenerateRequestModel(BaseModel):
     num_sets: int = Field(default=2, ge=2, le=3)
     include_encore: bool = True
     set_lengths: Optional[Dict[str, int]] = None
-    allow_previous_show: bool = False
+    allow_previous_show: bool = True
     seed: Optional[int] = None
     include_playlist: bool = True
     include_html: bool = False

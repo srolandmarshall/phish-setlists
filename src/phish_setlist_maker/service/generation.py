@@ -38,7 +38,7 @@ class GenerationRequest:
     num_sets: int = 2
     include_encore: bool = True
     set_lengths: Optional[Dict[str, int]] = None
-    allow_previous_show: bool = False
+    allow_previous_show: bool = True
     seed: Optional[int] = None
     include_playlist: bool = False
     include_html: bool = False
