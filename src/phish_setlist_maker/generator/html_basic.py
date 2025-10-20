@@ -23,6 +23,8 @@ def render_html_report(
     playlist_path: Optional[Path] = None,
     first_track_url: Optional[str] = None,
     playlist_sections: Optional[Sequence[PlaylistSection]] = None,
+    stylesheet_href: str = "phish-setlist.css",
+    script_src: Optional[str] = None,
 ) -> None:
     """Delegate to `render_html` while keeping the old function signature.
 
@@ -39,4 +41,6 @@ def render_html_report(
         playlist_path=playlist_path,
         first_track_url=first_track_url,
         playlist_sections=playlist_sections,
+        stylesheet_href=stylesheet_href,
+        script_src=script_src,
     )

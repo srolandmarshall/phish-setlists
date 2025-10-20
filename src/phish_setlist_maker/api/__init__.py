@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from pathlib import Path
 from typing import Dict, Iterable, Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Query
 from fastapi.responses import HTMLResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
@@ -179,6 +181,8 @@ def _create_generation_request(
     include_playlist: bool,
     include_html: bool,
     fail_on_playlist_error: bool,
+    stylesheet_href: Optional[str] = None,
+    script_src: Optional[str] = None,
 ) -> GenerationRequest:
     return GenerationRequest(
         reference_date=model.reference_date,
@@ -193,10 +197,19 @@ def _create_generation_request(
         include_html=include_html,
         prefetch_track_metadata=include_playlist or include_html,
         fail_on_playlist_error=fail_on_playlist_error,
+        html_stylesheet_href=stylesheet_href,
+        html_script_src=script_src,
     )
 
 
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+STATIC_AVAILABLE = STATIC_DIR.exists()
+STATIC_STYLESHEET = "/static/phish-setlist.css"
+STATIC_SCRIPT = "/static/player.js"
+
 app = FastAPI(title="Phish Setlist Maker API", version="0.1.0")
+if STATIC_AVAILABLE:
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/health", response_model=HealthResponse, tags=["status"])
@@ -231,7 +244,9 @@ def generate_html(
         payload,
         include_playlist=True,
         include_html=True,
-        fail_on_playlist_error=True,
+        fail_on_playlist_error=False,
+        stylesheet_href=STATIC_STYLESHEET if STATIC_AVAILABLE else None,
+        script_src=STATIC_SCRIPT if STATIC_AVAILABLE else None,
     )
 
     try:
@@ -267,11 +282,16 @@ def generate_endpoint(
     effective_include_html = payload.include_html or wants_html
     effective_include_playlist = payload.include_playlist or wants_html
 
+    stylesheet_href = STATIC_STYLESHEET if (effective_include_html and STATIC_AVAILABLE) else None
+    script_src = STATIC_SCRIPT if (effective_include_playlist and STATIC_AVAILABLE) else None
+
     generation_request = _create_generation_request(
         payload,
         include_playlist=effective_include_playlist,
         include_html=effective_include_html,
         fail_on_playlist_error=effective_include_playlist,
+        stylesheet_href=stylesheet_href,
+        script_src=script_src,
     )
 
     try:

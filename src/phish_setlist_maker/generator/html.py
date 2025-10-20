@@ -213,6 +213,8 @@ def build_html_markup(
     first_track_url: Optional[str] = None,
     playlist_sections: Optional[Sequence[PlaylistSection]] = None,
     encore_links: Optional[Sequence[PlaylistLink]] = None,
+    stylesheet_href: str = "phish-setlist.css",
+    script_src: Optional[str] = None,
 ) -> str:
     """Compose the HTML markup for a generated setlist."""
 
@@ -260,7 +262,13 @@ def build_html_markup(
     body.append("    </main>\n")
 
     if playlist_filename:
-        body.append(_render_script(first_track_url))
+        if script_src:
+            script_href = escape(script_src, quote=True)
+            body.append(f'    <script src="{script_href}"></script>\n')
+        else:
+            body.append(_render_script(first_track_url))
+
+    stylesheet_attr = escape(stylesheet_href, quote=True)
 
     html_parts = [
         "<!DOCTYPE html>\n",
@@ -268,7 +276,7 @@ def build_html_markup(
         "<head>\n",
         '  <meta charset="utf-8" />\n',
         "  <title>Generated Setlist</title>\n",
-        '  <link rel="stylesheet" href="phish-setlist.css">\n',
+        f'  <link rel="stylesheet" href="{stylesheet_attr}">\n',
         "</head>\n",
         "<body>\n",
         "  <h1>Generated Setlist</h1>\n",
@@ -289,6 +297,8 @@ def render_html(
     first_track_url: Optional[str] = None,
     playlist_sections: Optional[Sequence[PlaylistSection]] = None,
     encore_links: Optional[Sequence[PlaylistLink]] = None,
+    stylesheet_href: str = "phish-setlist.css",
+    script_src: Optional[str] = None,
 ) -> None:
     """Render the generated setlist to an HTML file."""
 
@@ -300,6 +310,8 @@ def render_html(
         first_track_url=first_track_url,
         playlist_sections=playlist_sections,
         encore_links=encore_links,
+        stylesheet_href=stylesheet_href,
+        script_src=script_src,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -313,5 +325,14 @@ def render_html(
     except Exception:
         # If we can't copy the stylesheet for any reason, continue and still write the HTML
         pass
+
+    if script_src:
+        js_source = Path(__file__).with_name(script_src)
+        js_target = output_path.parent / js_source.name
+        try:
+            js_text = js_source.read_text(encoding="utf-8")
+            js_target.write_text(js_text, encoding="utf-8")
+        except Exception:
+            pass
 
     output_path.write_text(html_text, encoding="utf-8")

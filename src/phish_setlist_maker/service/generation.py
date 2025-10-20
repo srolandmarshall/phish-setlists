@@ -40,6 +40,8 @@ class GenerationRequest:
     include_html: bool = False
     prefetch_track_metadata: bool = True
     fail_on_playlist_error: bool = False
+    html_stylesheet_href: Optional[str] = None
+    html_script_src: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -117,7 +119,8 @@ class SongCatalog:
 
 @dataclass(frozen=True)
 class CandidateTrack:
-    slug: str
+    track_id: int
+    slug: Optional[str]
     duration: Optional[int]
     show_date: Optional[date]
 
@@ -231,6 +234,7 @@ def build_song_catalog(db_session: Session) -> SongCatalog:
 def _query_tracks_for_song(db_session: Session, song_slug: str, limit: int = 30) -> List[CandidateTrack]:
     stmt = (
         select(
+            Track.id,
             Track.slug,
             Track.duration,
             Show.date.label("show_date"),
@@ -243,28 +247,67 @@ def _query_tracks_for_song(db_session: Session, song_slug: str, limit: int = 30)
         .limit(limit)
     )
     rows = db_session.execute(stmt).all()
-    return [CandidateTrack(slug=row.slug, duration=row.duration, show_date=row.show_date) for row in rows]
+    return [
+        CandidateTrack(
+            track_id=row.id,
+            slug=row.slug,
+            duration=row.duration,
+            show_date=row.show_date,
+        )
+        for row in rows
+    ]
 
 
-def _fetch_remote_track_metadata(track_slug: str, *, strict: bool) -> Tuple[Optional[str], Optional[int], Optional[str]]:
-    url = f"https://phish.in/api/v2/tracks/{track_slug}.json"
+def _fetch_remote_track_metadata(
+    *,
+    track_id: Optional[int],
+    song_slug: str,
+    rng: Random,
+    strict: bool,
+) -> Tuple[Optional[str], Optional[int], Optional[str]]:
+    last_error: Optional[Exception] = None
+
+    if track_id is not None:
+        url = f"https://phish.in/api/v2/tracks/{track_id}.json"
+        try:
+            resp = requests.get(url, timeout=10)
+            resp.raise_for_status()
+            data = resp.json().get("track", {})
+            mp3_url = data.get("mp3_url") or data.get("mp3")
+            duration_raw = data.get("duration")
+            duration_seconds = int(duration_raw // 1000) if isinstance(duration_raw, (int, float)) else None
+            show_date = data.get("show_date")
+            if mp3_url:
+                return mp3_url, duration_seconds, show_date
+        except requests.RequestException as exc:
+            last_error = exc
+
+    params = {
+        "song_slug": song_slug,
+        "per_page": 30,
+        "sort": "likes_count:desc",
+        "audio_status": "complete_or_partial",
+    }
     try:
-        resp = requests.get(url, timeout=10)
+        resp = requests.get("https://phish.in/api/v2/tracks.json", params=params, timeout=10)
         resp.raise_for_status()
     except requests.RequestException as exc:
-        if strict:
-            raise PlaylistServiceError(f"Unable to fetch track metadata for '{track_slug}'.") from exc
+        if strict and last_error is None:
+            raise PlaylistServiceError(f"Unable to fetch track metadata for song '{song_slug}'.") from exc
         return None, None, None
 
-    data = resp.json().get("track", {})
-    mp3_url = data.get("mp3_url") or data.get("mp3")
-    duration_raw = data.get("duration")
-    duration_seconds: Optional[int]
-    if isinstance(duration_raw, (int, float)):
-        duration_seconds = int(duration_raw // 1000)
-    else:
-        duration_seconds = None
-    show_date = data.get("show_date")
+    tracks = resp.json().get("tracks", [])
+    candidates = [track for track in tracks if track.get("mp3_url")]
+    if not candidates:
+        if strict and last_error is not None:
+            raise PlaylistServiceError(f"Unable to fetch track metadata for track id '{track_id}'.") from last_error
+        return None, None, None
+
+    selection = rng.choice(candidates)
+    mp3_url = selection.get("mp3_url")
+    duration_raw = selection.get("duration")
+    duration_seconds = int(duration_raw // 1000) if isinstance(duration_raw, (int, float)) else None
+    show_date = selection.get("show_date")
     return mp3_url, duration_seconds, show_date
 
 
@@ -287,7 +330,12 @@ def _select_track_display(
     sample_size = min(len(candidates), 10)
     selection = rng.choice(candidates[:sample_size])
 
-    mp3_url, remote_duration, remote_show_date = _fetch_remote_track_metadata(selection.slug, strict=strict)
+    mp3_url, remote_duration, remote_show_date = _fetch_remote_track_metadata(
+        track_id=selection.track_id,
+        song_slug=entry.slug,
+        rng=rng,
+        strict=strict,
+    )
     if not mp3_url:
         missing[song_title] = missing.get(song_title, 0) + 1
         if strict:
@@ -574,6 +622,8 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
         first_track_url = (
             playlist_artifacts.first_track_url if include_audio_links and playlist_artifacts else None
         )
+        stylesheet_href = request.html_stylesheet_href or "phish-setlist.css"
+        script_src = request.html_script_src if include_audio_links else None
 
         html_markup = build_html_markup(
             generated,
@@ -581,8 +631,10 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
             playlist_filename=playlist_filename,
             first_track_url=first_track_url,
             playlist_sections=sections_for_html,
+            stylesheet_href=stylesheet_href,
+            script_src=script_src,
         )
-        html_artifact = HTMLArtifact(markup=html_markup)
+        html_artifact = HTMLArtifact(markup=html_markup, stylesheet=stylesheet_href)
 
     return GenerationResult(
         seed=seed,
