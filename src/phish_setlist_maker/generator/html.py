@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional, Sequence, Tuple
 
+from html import escape
+
 from .core import GeneratedSetlist, SetSegment
 
 
@@ -57,11 +59,13 @@ def _render_section(section: PlaylistSection, include_links: bool) -> str:
 
         cell_parts = []
         if include_links and link.mp3_url:
+            href = escape(link.mp3_url, quote=True)
             cell_parts.append(
-                f'<a href="#" data-audio-url="{link.mp3_url}">{display_title}</a>'
+                f'<a href="#" data-audio-url="{href}">{display_title}</a>'
             )
         elif link.mp3_url and not include_links:
-            cell_parts.append(f'<a href="{link.mp3_url}">{display_title}</a>')
+            href = escape(link.mp3_url, quote=True)
+            cell_parts.append(f'<a href="{href}">{display_title}</a>')
         else:
             cell_parts.append(display_title)
 
@@ -93,34 +97,77 @@ def _render_notes(notes: Iterable[str]) -> str:
     )
 
 
-def _render_player(m3u_path: Path, first_track_url: Optional[str]) -> str:
-    audio_src = first_track_url or m3u_path.name
+def _render_player(playlist_href: str, first_track_url: Optional[str]) -> str:
+    audio_src = escape(first_track_url or "", quote=True)
+    data_initial = escape(first_track_url or "", quote=True)
+    href_attr = escape(playlist_href, quote=True)
     return (
         '      <section class="card">\n'
         "        <h2>Playlist</h2>\n"
-        f'        <audio id="playlist-player" controls autoplay preload="none" src="{audio_src}">\n'
+        f'        <audio id="playlist-player" controls preload="none" src="{audio_src}" data-initial-url="{data_initial}">\n'
         "          Your browser does not support the audio element.\n"
         "        </audio>\n"
         "        <p>\n"
-        f'          <a href="{m3u_path.name}" download>Download M3U playlist</a>\n'
+        f'          <a href="{href_attr}" download>Download M3U playlist</a>\n'
         "        </p>\n"
         "      </section>\n"
     )
 
 
-def _render_script() -> str:
+def _render_script(first_track_url: Optional[str]) -> str:
     return (
         "    <script>\n"
         "      const player = document.getElementById('playlist-player');\n"
         "      if (player) {\n"
-        "        document.querySelectorAll('a[data-audio-url]').forEach(link => {\n"
+        "        const links = Array.from(document.querySelectorAll('a[data-audio-url]'));\n"
+        "        const urls = links.map(link => link.dataset.audioUrl || '');\n"
+        "        const initialUrl = player.dataset.initialUrl || '';\n"
+        "        let currentIndex = urls.indexOf(initialUrl);\n"
+        "        if (currentIndex === -1) {\n"
+        "          currentIndex = 0;\n"
+        "        }\n"
+        "        if ((!player.getAttribute('src') || player.getAttribute('src') === '') && urls.length) {\n"
+        "          player.src = urls[currentIndex];\n"
+        "        }\n"
+        "        const setActiveLink = () => {\n"
+        "          links.forEach((link, idx) => {\n"
+        "            if (idx === currentIndex) {\n"
+        "              link.classList.add('active');\n"
+        "            } else {\n"
+        "              link.classList.remove('active');\n"
+        "            }\n"
+        "          });\n"
+        "        };\n"
+        "        setActiveLink();\n"
+        "        const updateCurrentIndex = (url) => {\n"
+        "          const idx = urls.indexOf(url);\n"
+        "          if (idx !== -1) {\n"
+        "            currentIndex = idx;\n"
+        "            setActiveLink();\n"
+        "          }\n"
+        "        };\n"
+        "        links.forEach((link, idx) => {\n"
         "          link.addEventListener('click', event => {\n"
         "            event.preventDefault();\n"
-        "            const url = link.getAttribute('data-audio-url');\n"
+        "            const url = link.dataset.audioUrl;\n"
         "            if (!url) return;\n"
+        "            updateCurrentIndex(url);\n"
         "            player.src = url;\n"
         "            player.play().catch(() => {});\n"
         "          });\n"
+        "        });\n"
+        "        player.addEventListener('ended', () => {\n"
+        "          if (urls.length === 0) return;\n"
+        "          const nextIndex = currentIndex + 1;\n"
+        "          if (nextIndex < urls.length) {\n"
+        "            currentIndex = nextIndex;\n"
+        "            const nextUrl = urls[currentIndex];\n"
+        "            if (nextUrl) {\n"
+        "              player.src = nextUrl;\n"
+        "              player.play().catch(() => {});\n"
+        "              setActiveLink();\n"
+        "            }\n"
+        "          }\n"
         "        });\n"
         "      }\n"
         "    </script>\n"
@@ -158,6 +205,81 @@ def _build_playlist_sections(
         yield encore_section
 
 
+def build_html_markup(
+    generated: GeneratedSetlist,
+    generated_at: datetime,
+    *,
+    playlist_filename: Optional[str] = None,
+    first_track_url: Optional[str] = None,
+    playlist_sections: Optional[Sequence[PlaylistSection]] = None,
+    encore_links: Optional[Sequence[PlaylistLink]] = None,
+) -> str:
+    """Compose the HTML markup for a generated setlist."""
+
+    sections = list(
+        _build_playlist_sections(
+            generated.sets,
+            generated.encore,
+            playlist_sections,
+            encore_links,
+        )
+    )
+
+    include_playlist_links = playlist_filename is not None
+
+    top_row: List[str] = []
+    top_row.append(_render_context(generated, generated_at))
+    if playlist_filename:
+        top_row.append(_render_player(playlist_filename, first_track_url))
+
+    sets_count = len(sections)
+    sets_cols = sets_count if sets_count >= 2 else 1
+
+    body: List[str] = []
+    body.append("    <main>\n")
+
+    if len(top_row) == 2:
+        body.append('      <div class="top-row two-cols">\n')
+        body.extend(top_row)
+        body.append("      </div>\n")
+    else:
+        body.append('      <div class="top-row one-col">\n')
+        body.append(top_row[0])
+        body.append("      </div>\n")
+
+    body.append(f'      <div class="sets-row" style="--sets-cols: {sets_cols};">\n')
+    for section in sections:
+        body.append(_render_section(section, include_links=include_playlist_links))
+    body.append("      </div>\n")
+
+    if generated.metadata.notes:
+        body.append('      <div class="notes-row">\n')
+        body.append(_render_notes(generated.metadata.notes))
+        body.append("      </div>\n")
+
+    body.append("    </main>\n")
+
+    if playlist_filename:
+        body.append(_render_script(first_track_url))
+
+    html_parts = [
+        "<!DOCTYPE html>\n",
+        '<html lang="en">\n',
+        "<head>\n",
+        '  <meta charset="utf-8" />\n',
+        "  <title>Generated Setlist</title>\n",
+        '  <link rel="stylesheet" href="phish-setlist.css">\n',
+        "</head>\n",
+        "<body>\n",
+        "  <h1>Generated Setlist</h1>\n",
+        "".join(body),
+        "</body>\n",
+        "</html>\n",
+    ]
+
+    return "".join(html_parts)
+
+
 def render_html(
     output_path: Path,
     generated: GeneratedSetlist,
@@ -170,78 +292,15 @@ def render_html(
 ) -> None:
     """Render the generated setlist to an HTML file."""
 
-    sections = list(
-        _build_playlist_sections(
-            generated.sets,
-            generated.encore,
-            playlist_sections,
-            encore_links,
-        )
+    playlist_filename = playlist_path.name if playlist_path else None
+    html_text = build_html_markup(
+        generated,
+        generated_at,
+        playlist_filename=playlist_filename,
+        first_track_url=first_track_url,
+        playlist_sections=playlist_sections,
+        encore_links=encore_links,
     )
-
-    include_playlist_links = playlist_path is not None
-
-    # Layout: top row (Context + optional Playlist), sets row (N columns), notes row (full width)
-    top_row = []
-    top_row.append(_render_context(generated, generated_at))
-    if playlist_path:
-        top_row.append(_render_player(playlist_path, first_track_url))
-
-    # Determine how many columns the sets row should have: number of sections
-    # excluding Context/Playlist/Notes. We count only the musical sections.
-    sets_count = len(sections)
-    # If there's at least one set, choose columns: 3 for 1-3 sets, 4 for 4+, but
-    # the caller requested: 1/3 for 2+Encore, 1/4 for 3+Encore, etc. We'll
-    # map sets_count -> sets_cols = sets_count if sets_count >= 2 else 1
-    sets_cols = sets_count if sets_count >= 2 else 1
-
-    body = []
-    body.append(f"    <main>\n")
-
-    # Top row
-    if len(top_row) == 2:
-        body.append('      <div class="top-row two-cols">\n')
-        body.append(top_row[0])
-        body.append(top_row[1])
-        body.append("      </div>\n")
-    else:
-        body.append('      <div class="top-row one-col">\n')
-        body.append(top_row[0])
-        body.append("      </div>\n")
-
-    # Sets row: render all musical sections (sets + encore) in a grid
-    body.append(f'      <div class="sets-row" style="--sets-cols: {sets_cols};">\n')
-    for section in sections:
-        body.append(_render_section(section, include_links=include_playlist_links))
-    body.append("      </div>\n")
-
-    # Notes row (full width)
-    if generated.metadata.notes:
-        body.append('      <div class="notes-row">\n')
-        body.append(_render_notes(generated.metadata.notes))
-        body.append("      </div>\n")
-
-    body.append("    </main>\n")
-
-    if playlist_path:
-        body.append(_render_script())
-
-    body_parts = body
-
-    html = [
-        "<!DOCTYPE html>\n",
-        '<html lang="en">\n',
-        "<head>\n",
-        '  <meta charset="utf-8" />\n',
-        "  <title>Generated Setlist</title>\n",
-        '  <link rel="stylesheet" href="phish-setlist.css">\n',
-        "</head>\n",
-        "<body>\n",
-        "  <h1>Generated Setlist</h1>\n",
-        "".join(body_parts),
-        "</body>\n",
-        "</html>\n",
-    ]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -255,4 +314,4 @@ def render_html(
         # If we can't copy the stylesheet for any reason, continue and still write the HTML
         pass
 
-    output_path.write_text("".join(html), encoding="utf-8")
+    output_path.write_text(html_text, encoding="utf-8")

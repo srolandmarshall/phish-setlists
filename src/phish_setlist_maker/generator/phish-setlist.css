@@ -74,6 +74,9 @@ a {
 a:hover {
   text-decoration: underline;
 }
+a[data-audio-url].active {
+  font-weight: 600;
+}
 .song-origin {
   display: block;
   margin-top: 0.25rem;
