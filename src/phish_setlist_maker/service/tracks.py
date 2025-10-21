@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from random import Random
 from typing import List, Optional, Tuple
 
 import requests
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from ..models import Show, Song, SongTrack, Track
@@ -25,6 +25,7 @@ class CandidateTrack:
     duration: Optional[int]
     show_date: Optional[date]
     likes_count: int
+    metadata_cache: Optional[dict] = None
 
 
 def query_tracks_for_song(db_session: Session, song_slug: str, limit: int = 25) -> List[CandidateTrack]:
@@ -35,6 +36,7 @@ def query_tracks_for_song(db_session: Session, song_slug: str, limit: int = 25) 
             Track.duration,
             Track.likes_count,
             Show.date.label("show_date"),
+            Track.metadata_cache,
         )
         .join(SongTrack, SongTrack.track_id == Track.id)
         .join(Song, SongTrack.song_id == Song.id)
@@ -51,6 +53,7 @@ def query_tracks_for_song(db_session: Session, song_slug: str, limit: int = 25) 
             duration=row.duration,
             show_date=row.show_date,
             likes_count=row.likes_count or 0,
+            metadata_cache=row.metadata_cache,
         )
         for row in rows
         if row.id is not None
@@ -138,3 +141,73 @@ def fetch_remote_track_metadata(
     duration_seconds = int(duration_raw // 1000) if isinstance(duration_raw, (int, float)) else None
     show_date = selection.get("show_date")
     return mp3_url, duration_seconds, show_date
+
+
+def _cached_metadata_valid(cache: dict) -> bool:
+    url = cache.get("mp3_url")
+    if not url:
+        return False
+    try:
+        head_resp = requests.head(url, timeout=5, allow_redirects=True)
+        if head_resp.status_code >= 400:
+            return False
+    except requests.RequestException:
+        return False
+    return True
+
+
+def _update_track_cache(
+    session: Session,
+    track_id: int,
+    *,
+    mp3_url: Optional[str],
+    duration: Optional[int],
+    show_date: Optional[str],
+) -> None:
+    values = {
+        "mp3_url": mp3_url,
+        "duration": duration,
+        "show_date": show_date,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+    session.execute(
+        update(Track)
+        .where(Track.id == track_id)
+        .values(metadata_cache=values)
+    )
+    session.flush()
+
+
+def resolve_track_metadata(
+    session: Session,
+    candidate: CandidateTrack,
+    *,
+    song_slug: str,
+    rng: Random,
+    strict: bool,
+) -> Tuple[Optional[str], Optional[int], Optional[str]]:
+    cache = candidate.metadata_cache or {}
+    if cache and _cached_metadata_valid(cache):
+        return (
+            cache.get("mp3_url"),
+            cache.get("duration"),
+            cache.get("show_date"),
+        )
+
+    mp3_url, duration, show_date = fetch_remote_track_metadata(
+        track_id=candidate.track_id,
+        song_slug=song_slug,
+        rng=rng,
+        strict=strict,
+    )
+
+    if mp3_url:
+        _update_track_cache(
+            session,
+            candidate.track_id,
+            mp3_url=mp3_url,
+            duration=duration,
+            show_date=show_date,
+        )
+
+    return mp3_url, duration, show_date

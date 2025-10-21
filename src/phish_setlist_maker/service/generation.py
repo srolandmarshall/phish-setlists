@@ -26,7 +26,7 @@ from .catalog import (
 from .errors import PlaylistServiceError
 from .playlist import build_playlist_sections
 from .models import GenerationResult, HTMLArtifact, PlaylistArtifacts, SegmentDetails, SongDisplay
-from .tracks import CandidateTrack, fetch_remote_track_metadata, query_tracks_for_song
+from .tracks import CandidateTrack, query_tracks_for_song, resolve_track_metadata
 from .segments import expand_tracks, segment_duration_seconds
 
 logger = logging.getLogger("uvicorn.error")
@@ -110,8 +110,9 @@ def _select_track_display(
         selection.slug,
     )
 
-    mp3_url, remote_duration, remote_show_date = fetch_remote_track_metadata(
-        track_id=selection.track_id,
+    mp3_url, remote_duration, remote_show_date = resolve_track_metadata(
+        db_session,
+        selection,
         song_slug=entry.slug,
         rng=rng,
         strict=strict,

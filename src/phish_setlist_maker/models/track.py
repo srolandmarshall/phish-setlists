@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from sqlalchemy import ForeignKey, Integer, String, Text
+from sqlalchemy import ForeignKey, Integer, String, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -28,6 +28,7 @@ class Track(Base):
     jam_starts_at_second: Mapped[Optional[int]] = mapped_column(Integer)
     audio_file_data: Mapped[Optional[str]] = mapped_column(Text)
     waveform_png_data: Mapped[Optional[str]] = mapped_column(Text)
+    metadata_cache: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     show: Mapped[Optional["Show"]] = relationship("Show", back_populates="tracks")
     song_links: Mapped[List["SongTrack"]] = relationship(
@@ -39,4 +40,3 @@ class Track(Base):
         back_populates="tracks",
         viewonly=True,
     )
-
