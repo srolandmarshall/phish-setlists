@@ -41,3 +41,18 @@ DEFAULT_SET_LENGTHS: Dict[str, int] = {
     "set3": 6,
     "encore": 2,
 }
+
+# Target runtimes in seconds. Two-set shows lean on the baseline values;
+# three-set shows use the overrides defined below.
+DEFAULT_SET_DURATION_TARGETS: Dict[str, Tuple[int, int]] = {
+    "set1": (80 * 60, 100 * 60),  # 90 ±10 minutes
+    "set2": (80 * 60, 100 * 60),
+    "set3": (80 * 60, 100 * 60),
+    "encore": (15 * 60, 25 * 60),  # 20 ±5 minutes
+}
+
+THREE_SET_DURATION_OVERRIDES: Dict[str, Tuple[int, int]] = {
+    "set1": (50 * 60, 70 * 60),  # ~60 ±10 minutes
+    "set2": (50 * 60, 70 * 60),
+    "set3": (50 * 60, 70 * 60),
+}

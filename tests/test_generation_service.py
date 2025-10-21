@@ -183,3 +183,53 @@ def test_generate_show_populates_playlist_with_remote_fallback(
     assert track_display.mp3_url == fallback_url
     assert track_display.duration_seconds == 660
     assert track_display.show_date == "1999-10-31"
+
+
+def test_generate_show_duration_notes_use_actual_times(
+    db_session,
+    mocker: MockerFixture,
+) -> None:
+    """Duration-cap notes should reflect actual calculated segment runtimes."""
+
+    fake_metadata = GenerationMetadata(
+        reference_date=date(2024, 1, 1),
+        cutoff_date=date(2024, 1, 1),
+        era="4.0",
+        year=2024,
+        notes=["Capped Set 1 at 2 songs (~90:00) to respect duration target."],
+    )
+    fake_generated = GeneratedSetlist(
+        sets=[
+            SetSegment(label="Set 1", songs=["Song A", "Song B"]),
+        ],
+        encore=None,
+        metadata=fake_metadata,
+    )
+
+    generator_cls = mocker.patch("phish_setlist_maker.service.generation.SetlistGenerator")
+    generator_instance = generator_cls.return_value
+    generator_instance.generate.return_value = fake_generated
+
+    mocker.patch(
+        "phish_setlist_maker.service.generation.segment_duration_seconds",
+        side_effect=[6300],
+    )
+
+    request = GenerationRequest(
+        era="4.0",
+        year=2024,
+        num_sets=1,
+        include_encore=False,
+        set_lengths={"set1": 2},
+        allow_previous_show=True,
+        seed=5,
+        include_playlist=False,
+        include_html=False,
+        prefetch_track_metadata=False,
+    )
+
+    result = generate_show(db_session, request)
+
+    assert result.generated.metadata.notes == [
+        "Capped Set 1 at 2 songs (~105:00) to respect duration target."
+    ]

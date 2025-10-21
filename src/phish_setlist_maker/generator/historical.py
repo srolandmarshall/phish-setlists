@@ -14,7 +14,13 @@ from sqlalchemy.sql import Select
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..constants import DEFAULT_SET_LENGTHS, ERA_DEFINITIONS, SET_ALIASES
+from ..constants import (
+    DEFAULT_SET_DURATION_TARGETS,
+    DEFAULT_SET_LENGTHS,
+    ERA_DEFINITIONS,
+    SET_ALIASES,
+    THREE_SET_DURATION_OVERRIDES,
+)
 from ..models import Show, Track
 
 
@@ -38,6 +44,20 @@ def normalize_set_label(label: str) -> str:
         if normalized in aliases:
             return canonical
     return normalized.lower()
+
+
+def _quantile(values: List[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    if len(values) == 1:
+        return values[0]
+    sorted_values = sorted(values)
+    clamped = min(max(percentile, 0.0), 1.0)
+    index = clamped * (len(sorted_values) - 1)
+    lower = int(index)
+    upper = min(lower + 1, len(sorted_values) - 1)
+    weight = index - lower
+    return sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight
 
 
 def filter_shows_query(
@@ -154,6 +174,7 @@ class SegmentStatistics:
     top_sequences: List[Tuple[Tuple[str, ...], int]]
     longform_songs: List[Tuple[str, float]]
     adjacency_map: Dict[str, Dict[str, int]]
+    song_durations: Dict[str, float]
 
 
 def segment_statistics(
@@ -199,6 +220,7 @@ def segment_statistics(
     duration_by_count: Dict[int, List[float]] = {}
     sequence_counter: Counter[Tuple[str, ...]] = Counter()
     longform_song_durations: Dict[str, List[float]] = {}
+    song_duration_samples: Dict[str, List[float]] = {}
 
     for (show_id, raw_label), tracks in segments.items():
         tracks.sort(key=lambda item: item[0])
@@ -222,6 +244,7 @@ def segment_statistics(
         for _, title, duration in tracks:
             if duration > 0:
                 longform_song_durations.setdefault(title, []).append(duration)
+                song_duration_samples.setdefault(title, []).append(duration)
 
     average_durations = {
         count: mean(values) if values else 0.0 for count, values in duration_by_count.items()
@@ -244,6 +267,11 @@ def segment_statistics(
     ]
     longform_songs.sort(key=lambda item: item[1], reverse=True)
 
+    song_durations = {
+        title: _quantile(values, 0.8) if values else 0.0
+        for title, values in song_duration_samples.items()
+    }
+
     return SegmentStatistics(
         label=canonical_label,
         patterns=patterns,
@@ -252,6 +280,7 @@ def segment_statistics(
         top_sequences=top_sequences,
         longform_songs=longform_songs,
         adjacency_map={key: dict(value.items()) for key, value in adjacency_map.items()},
+        song_durations=song_durations,
     )
 
 
@@ -393,19 +422,71 @@ def random_set_lengths(
         year=year,
     )
 
+    duration_targets: Dict[str, Tuple[int, int]] = dict(DEFAULT_SET_DURATION_TARGETS)
+    if num_sets == 3:
+        duration_targets.update(THREE_SET_DURATION_OVERRIDES)
+
+    target_segments = [f"set{idx}" for idx in range(1, num_sets + 1)]
+    if include_encore:
+        target_segments.append("encore")
+
+    segment_stats_map: Dict[str, SegmentStatistics] = {}
+    for canonical in target_segments:
+        segment_stats_map[canonical] = segment_statistics(
+            session,
+            target_set=canonical,
+            cutoff_date=cutoff_date,
+            era=era,
+            year=year,
+            top_n_sequences=0,
+        )
+
     def pick_length(label: str) -> int:
         distribution = stats.get(label)
         if not distribution or not distribution.histogram:
             return DEFAULT_SET_LENGTHS.get(label, 8)
 
-        total_weight = sum(distribution.histogram.values())
+        histogram = dict(distribution.histogram)
+        segment_stats = segment_stats_map.get(label)
+        duration_range = duration_targets.get(label)
+
+        if duration_range and segment_stats:
+            lower, upper = duration_range
+            averages = segment_stats.average_durations_by_count
+            eligible = {
+                count: weight
+                for count, weight in histogram.items()
+                if lower <= averages.get(count, 0.0) <= upper
+            }
+            if eligible:
+                histogram = eligible
+            else:
+                target_mid = (lower + upper) / 2
+
+                def duration_distance(count: int) -> float:
+                    duration = averages.get(count)
+                    if duration is None or duration <= 0:
+                        return float("inf")
+                    return abs(duration - target_mid)
+
+                closest = min(
+                    histogram.keys(),
+                    key=lambda count: (duration_distance(count), -histogram[count]),
+                )
+                return closest
+
+        weighted_items = list(histogram.items())
+        total_weight = sum(weight for _, weight in weighted_items)
+        if total_weight <= 0:
+            return DEFAULT_SET_LENGTHS.get(label, 8)
+
         choice = rng.random() * total_weight
         cumulative = 0.0
-        for length, weight in distribution.histogram.items():
+        for length, weight in weighted_items:
             cumulative += weight
             if choice <= cumulative:
                 return length
-        return max(distribution.histogram, key=distribution.histogram.get)
+        return max(histogram, key=histogram.get)
 
     selected: Dict[str, int] = {}
     for idx in range(1, num_sets + 1):

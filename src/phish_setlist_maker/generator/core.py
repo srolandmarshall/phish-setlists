@@ -5,12 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 from random import Random
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..constants import DEFAULT_SET_LENGTHS, ERA_DEFINITIONS
+from ..constants import (
+    DEFAULT_SET_DURATION_TARGETS,
+    DEFAULT_SET_LENGTHS,
+    ERA_DEFINITIONS,
+    THREE_SET_DURATION_OVERRIDES,
+)
 from ..models import Show
 from .historical import (
     SegmentStatistics,
@@ -53,6 +58,10 @@ class GeneratedSetlist:
 
 class SetlistGenerator:
     """Generate Phish setlists from historical performance data."""
+
+    _duration_safety_factor: float = 1.05
+    _duration_margin_ratio: float = 0.25
+    _duration_margin_cap: int = 8 * 60
 
     def __init__(
         self,
@@ -104,6 +113,10 @@ class SetlistGenerator:
             cutoff = date(year, 12, 31)
 
         lengths = {**DEFAULT_SET_LENGTHS, **(set_lengths or {})}
+        duration_targets = self._resolve_duration_targets(
+            num_sets=num_sets,
+            include_encore=include_encore,
+        )
 
         previous_show_songs: Set[str] = set()
         previous_show_date: Optional[date] = None
@@ -190,6 +203,7 @@ class SetlistGenerator:
                 allow_single_song=False,
                 longform_titles=set_longform,
                 adjacency_map=adjacency_map,
+                duration_target=duration_targets.get(canonical_set),
             )
             metadata_notes.extend(set_notes)
             sets.append(SetSegment(label=set_label, songs=set_songs))
@@ -213,6 +227,7 @@ class SetlistGenerator:
                 allow_single_song=True,
                 longform_titles=encore_longform,
                 adjacency_map=encore_adjacency,
+                duration_target=duration_targets.get("encore"),
             )
             metadata_notes.extend(encore_notes)
             encore_segment = SetSegment(label="Encore", songs=encore_songs)
@@ -264,6 +279,19 @@ class SetlistGenerator:
         stmt = stmt.order_by(Show.date.desc()).limit(1)
         return self.session.execute(stmt).scalar_one_or_none()
 
+    def _resolve_duration_targets(
+        self,
+        *,
+        num_sets: int,
+        include_encore: bool,
+    ) -> Dict[str, Tuple[int, int]]:
+        targets: Dict[str, Tuple[int, int]] = dict(DEFAULT_SET_DURATION_TARGETS)
+        if num_sets == 3:
+            targets.update(THREE_SET_DURATION_OVERRIDES)
+        if not include_encore:
+            targets.pop("encore", None)
+        return targets
+
     def _compose_segment(
         self,
         *,
@@ -278,11 +306,14 @@ class SetlistGenerator:
         allow_single_song: bool,
         longform_titles: Set[str],
         adjacency_map: Optional[Dict[str, Dict[str, int]]],
+        duration_target: Optional[Tuple[int, int]],
     ) -> Tuple[List[str], List[str]]:
         notes: List[str] = []
         songs: List[str] = []
 
-        max_length = desired_count if desired_count > 0 else None
+        duration_capped = False
+        song_stats = stats.song_durations if stats else {}
+        estimated_duration = 0.0
 
         if allow_sequences and stats is not None and desired_count > 0:
             remaining = max(0, desired_count - len(songs))
@@ -291,16 +322,21 @@ class SetlistGenerator:
 
         if remaining > 0:
             previous_song = songs[-1] if songs else None
-            additional = self._pick_songs_for_set(
-                frequencies_by_set,
-                canonical_set,
-                remaining,
-                used_songs,
-                eligible_songs,
+            additional, capped, estimated_duration = self._select_with_duration_budget(
+                base_songs=tuple(songs),
+                desired_count=remaining,
+                frequencies_by_set=frequencies_by_set,
+                target_set=canonical_set,
+                used_songs=used_songs,
+                eligible_songs=eligible_songs,
                 previous_song=previous_song,
                 adjacency_map=adjacency_map,
+                stats=stats,
+                duration_target=duration_target,
             )
-            songs.extend(additional)
+            if additional:
+                songs.extend(additional)
+            duration_capped = duration_capped or capped
 
         if (
             not allow_single_song
@@ -309,16 +345,21 @@ class SetlistGenerator:
             and songs[0] not in longform_titles
         ):
             previous_song = songs[-1] if songs else None
-            extra = self._pick_songs_for_set(
-                frequencies_by_set,
-                canonical_set,
-                1,
-                used_songs,
-                eligible_songs,
+            extra, capped, estimated_duration = self._select_with_duration_budget(
+                base_songs=tuple(songs),
+                desired_count=1,
+                frequencies_by_set=frequencies_by_set,
+                target_set=canonical_set,
+                used_songs=used_songs,
+                eligible_songs=eligible_songs,
                 previous_song=previous_song,
                 adjacency_map=adjacency_map,
+                stats=stats,
+                duration_target=duration_target,
             )
-            songs.extend(extra)
+            if extra:
+                songs.extend(extra)
+            duration_capped = duration_capped or capped
 
         # Ensure uniqueness and order preservation after extensions.
         seen: Set[str] = set()
@@ -332,12 +373,14 @@ class SetlistGenerator:
 
         used_songs.update(songs)
 
+        estimated_duration = self._estimate_segment_duration(
+            songs,
+            song_stats,
+            duration_target,
+        )
+
         if not songs:
             notes.append(f"No songs selected for {segment_label}; limited historical data.")
-        elif len(songs) < desired_count:
-            notes.append(
-                f"Only selected {len(songs)}/{desired_count} songs for {segment_label}; limited historical data."
-            )
         elif len(songs) == 1:
             song = songs[0]
             if song in longform_titles:
@@ -352,8 +395,164 @@ class SetlistGenerator:
                     notes.append(
                         f"{segment_label} limited to a single song; limited historical data."
                     )
+        if songs:
+            if len(songs) < desired_count:
+                if duration_capped and duration_target:
+                    notes.append(
+                        f"Capped {segment_label} at {len(songs)} songs (~{self._format_duration(estimated_duration)})"
+                        " to respect duration target."
+                    )
+                else:
+                    notes.append(
+                        f"Only selected {len(songs)}/{desired_count} songs for {segment_label}; limited historical data."
+                    )
+            elif duration_capped and duration_target:
+                notes.append(
+                    f"Capped {segment_label} at {len(songs)} songs (~{self._format_duration(estimated_duration)})"
+                    " to respect duration target."
+                )
 
         return songs, notes
+
+    def _select_with_duration_budget(
+        self,
+        *,
+        base_songs: Sequence[str],
+        desired_count: int,
+        frequencies_by_set: Dict[str, List[SongFrequency]],
+        target_set: str,
+        used_songs: Set[str],
+        eligible_songs: Iterable[str],
+        previous_song: Optional[str],
+        adjacency_map: Optional[Dict[str, Dict[str, int]]],
+        stats: Optional[SegmentStatistics],
+        duration_target: Optional[Tuple[int, int]],
+    ) -> Tuple[List[str], bool, float]:
+        song_durations = stats.song_durations if stats else {}
+        safety_factor = self._duration_safety_factor if duration_target else 1.0
+
+        if desired_count <= 0:
+            current = self._estimate_segment_duration(
+                base_songs,
+                song_durations,
+                duration_target,
+                multiplier=safety_factor,
+            )
+            return [], False, current
+
+        pool = self._build_candidate_pool(frequencies_by_set, target_set, eligible_songs)
+        fallback_duration = self._fallback_duration(
+            song_durations,
+            max(desired_count, 1),
+            duration_target,
+        )
+        current_duration = self._estimate_segment_duration(
+            base_songs,
+            song_durations,
+            duration_target,
+            fallback_duration,
+            multiplier=safety_factor,
+        )
+
+        max_duration: Optional[float] = None
+        if duration_target:
+            lower, upper = duration_target
+            window = max(upper - lower, 0)
+            margin = min(int(window * self._duration_margin_ratio), self._duration_margin_cap)
+            adjusted_upper = max(lower, upper - margin)
+            max_duration = float(adjusted_upper)
+
+        base_song_count = len(base_songs)
+        duration_capped = False
+        selection: List[str] = []
+        prev = previous_song
+
+        while len(selection) < desired_count:
+            pool = [freq for freq in pool if freq.title not in used_songs]
+            if not pool:
+                break
+
+            choice = self._weighted_pick(
+                pool,
+                used_songs,
+                previous_song=prev,
+                adjacency_map=adjacency_map,
+            )
+            if not choice:
+                break
+
+            candidate_duration = song_durations.get(choice, fallback_duration) * safety_factor
+            estimated_total = current_duration + candidate_duration
+
+            if (
+                max_duration is not None
+                and (base_song_count + len(selection)) >= 1
+                and estimated_total > max_duration
+            ):
+                duration_capped = True
+                pool = [freq for freq in pool if freq.title != choice]
+                continue
+
+            selection.append(choice)
+            used_songs.add(choice)
+            current_duration = estimated_total
+            prev = choice
+            pool = [freq for freq in pool if freq.title not in used_songs]
+
+        return selection, duration_capped, current_duration
+
+    def _fallback_duration(
+        self,
+        song_durations: Dict[str, float],
+        remaining_slots: int,
+        duration_target: Optional[Tuple[int, int]],
+    ) -> float:
+        if song_durations:
+            total = sum(song_durations.values())
+            count = len(song_durations)
+            if count > 0 and total > 0:
+                return total / count
+
+        if duration_target:
+            lower, upper = duration_target
+            count = max(remaining_slots, 1)
+            per_slot_upper = upper / count
+            return max(per_slot_upper, 60.0)
+
+        return 600.0
+
+    def _estimate_segment_duration(
+        self,
+        songs: Sequence[str],
+        song_durations: Dict[str, float],
+        duration_target: Optional[Tuple[int, int]],
+        fallback_duration: Optional[float] = None,
+        *,
+        multiplier: float = 1.0,
+    ) -> float:
+        if not songs:
+            return 0.0
+
+        fallback = fallback_duration
+        if fallback is None:
+            fallback = self._fallback_duration(
+                song_durations,
+                len(songs),
+                duration_target,
+            )
+
+        total = 0.0
+        for song in songs:
+            total += song_durations.get(song, fallback) * multiplier
+        return total
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        if seconds <= 0:
+            return "0:00"
+        total_seconds = int(round(seconds))
+        minutes, remainder = divmod(total_seconds, 60)
+        return f"{minutes}:{remainder:02d}"
 
     def _choose_sequence(
         self,
@@ -412,37 +611,6 @@ class SetlistGenerator:
             if rand <= cumulative:
                 return sequence
         return candidates[-1][0]
-
-    def _pick_songs_for_set(
-        self,
-        frequencies_by_set: Dict[str, List[SongFrequency]],
-        target_set: str,
-        desired_count: int,
-        used_songs: Set[str],
-        eligible_songs: Iterable[str],
-        *,
-        previous_song: Optional[str] = None,
-        adjacency_map: Optional[Dict[str, Dict[str, int]]] = None,
-    ) -> List[str]:
-        pool = self._build_candidate_pool(frequencies_by_set, target_set, eligible_songs)
-        selection: List[str] = []
-        prev = previous_song
-
-        for _ in range(desired_count):
-            choice = self._weighted_pick(
-                pool,
-                used_songs,
-                previous_song=prev,
-                adjacency_map=adjacency_map,
-            )
-            if not choice:
-                break
-            selection.append(choice)
-            used_songs.add(choice)
-            prev = choice
-            pool = [freq for freq in pool if freq.title not in used_songs]
-
-        return selection
 
     def _build_candidate_pool(
         self,

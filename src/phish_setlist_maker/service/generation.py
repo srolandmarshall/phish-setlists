@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 import logging
+import re
 from random import Random, SystemRandom
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..constants import ERA_DEFINITIONS
 from ..generator import GeneratedSetlist, SetlistGenerator, random_set_lengths
-from ..generator.core import SetSegment
+from ..generator.core import GenerationMetadata, SetSegment
 from ..generator.html import build_html_markup
 from ..models import Show, SongTrack, Track
 from .catalog import (
@@ -30,6 +31,53 @@ from .tracks import CandidateTrack, query_tracks_for_song, resolve_track_metadat
 from .segments import expand_tracks, segment_duration_seconds
 
 logger = logging.getLogger("uvicorn.error")
+
+_CAP_NOTE_PATTERN = re.compile(
+    r"^(Capped (?P<label>.+?) at (?P<count>\d+) songs) \(~(?P<duration>[^)]+)\)(?P<suffix>.*)$"
+)
+
+
+def _format_seconds(seconds: int) -> str:
+    minutes, remainder = divmod(max(seconds, 0), 60)
+    return f"{minutes}:{remainder:02d}"
+
+
+def _update_duration_notes_with_actuals(
+    metadata: GenerationMetadata,
+    segments: Sequence[SegmentDetails],
+    encore: Optional[SegmentDetails],
+) -> None:
+    actual_durations: Dict[str, int] = {
+        segment.label: segment.duration_seconds
+        for segment in segments
+        if segment.duration_seconds is not None
+    }
+    if encore and encore.duration_seconds is not None:
+        actual_durations[encore.label] = encore.duration_seconds
+
+    if not actual_durations or not metadata.notes:
+        return
+
+    updated: List[str] = []
+    for note in metadata.notes:
+        match = _CAP_NOTE_PATTERN.match(note)
+        if not match:
+            updated.append(note)
+            continue
+
+        label = match.group("label")
+        count = match.group("count")
+        suffix = match.group("suffix")
+
+        actual_seconds = actual_durations.get(label)
+        if actual_seconds is None:
+            updated.append(note)
+            continue
+
+        formatted = _format_seconds(actual_seconds)
+        updated.append(f"Capped {label} at {count} songs (~{formatted}){suffix}")
+
+    metadata.notes[:] = updated
 
 
 @dataclass(frozen=True)
@@ -344,6 +392,8 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
             tracks=expand_tracks(generated.encore.songs, track_lookup),
             duration_seconds=segment_duration_seconds(generated.encore, track_lookup),
         )
+
+    _update_duration_notes_with_actuals(metadata, segments_details, encore_details)
 
     if request.include_playlist and playlist_artifacts:
         for title in playlist_artifacts.missing_tracks:
