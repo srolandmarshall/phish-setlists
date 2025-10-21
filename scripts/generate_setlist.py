@@ -16,12 +16,13 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from phish_setlist_maker.db import session_scope  # noqa: E402
-from phish_setlist_maker.generator.html_basic import PlaylistLink, PlaylistSection, render_html_report  # noqa: E402
-from phish_setlist_maker.service.generation import (  # noqa: E402
+from phish_setlist_maker.generator.html_basic import render_html_report  # noqa: E402
+from phish_setlist_maker.service import (  # noqa: E402
     GenerationRequest,
     SongDisplay,
     generate_show,
 )
+from phish_setlist_maker.service.playlist import build_playlist_sections  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -145,9 +146,29 @@ def render_markdown(
             return rows
         return [SongDisplay(title=song, mp3_url=None, duration_seconds=None, origin=None) for song in fallback_songs]
 
+    def format_total(seconds: Optional[int]) -> Optional[str]:
+        if seconds is None or seconds <= 0:
+            return None
+        minutes, secs = divmod(seconds, 60)
+        return f"{minutes}:{secs:02d}"
+
+    def rows_duration(rows: Sequence[SongDisplay]) -> Optional[int]:
+        total = 0
+        any_duration = False
+        for song in rows:
+            if song.duration_seconds and song.duration_seconds > 0:
+                total += song.duration_seconds
+                any_duration = True
+        return total if any_duration else None
+
     for segment in generated.sets:
-        lines.append(f"## {segment.label}")
         rows = section_tracks(segment.label, segment.songs)
+        total_seconds = rows_duration(rows)
+        header = segment.label
+        formatted_total = format_total(total_seconds)
+        if formatted_total:
+            header = f"{header} [{formatted_total}]"
+        lines.append(f"## {header}")
         for idx, song in enumerate(rows, start=1):
             display = song.title
             if song.duration_label:
@@ -158,9 +179,12 @@ def render_markdown(
         lines.append("")
 
     if generated.encore:
-        lines.append("## Encore")
         encore_label = generated.encore.label if generated.encore else "Encore"
         rows = section_tracks(encore_label, generated.encore.songs if generated.encore else [])
+        total_seconds = rows_duration(rows)
+        formatted_total = format_total(total_seconds)
+        header = encore_label if not formatted_total else f"{encore_label} [{formatted_total}]"
+        lines.append(f"## {header}")
         for idx, song in enumerate(rows, start=1):
             display = song.title
             if song.duration_label:
@@ -234,24 +258,11 @@ def main() -> None:
         playlist_file = playlist_path if include_playlist else None
         track_url = first_track_url if include_playlist else None
 
-        sections: Optional[List[PlaylistSection]] = None
-        if playlist_sections_data:
-            sections = [
-                PlaylistSection(
-                    title=section_title,
-                    tracks=[
-                        PlaylistLink(
-                            title=song.title,
-                            mp3_url=song.mp3_url if include_playlist else None,
-                            duration=song.duration_label,
-                            origin=song.origin,
-                        )
-                        for song in rows
-                    ],
-                )
-                for section_title, rows in playlist_sections_data
-            ]
-
+        sections = build_playlist_sections(
+            result.segments,
+            result.encore,
+            include_audio_links=include_playlist,
+        )
         render_html_report(
             output_path=path,
             generated=generated,

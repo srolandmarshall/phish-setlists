@@ -1,0 +1,109 @@
+"""Smoke tests for the FastAPI negotiation logic."""
+
+from __future__ import annotations
+
+from datetime import date, datetime, timezone
+
+import pytest
+from fastapi.testclient import TestClient
+from pytest_mock import MockerFixture
+
+from phish_setlist_maker.api import app
+from phish_setlist_maker.api.dependencies import get_session
+from phish_setlist_maker.generator.core import GenerationMetadata, GeneratedSetlist, SetSegment
+from phish_setlist_maker.service import (
+    GenerationRequest,
+    GenerationResult,
+    HTMLArtifact,
+    SegmentDetails,
+    SongDisplay,
+)
+
+
+@pytest.fixture()
+def api_client(db_session) -> TestClient:
+    """Provide a FastAPI test client with a mocked session dependency."""
+
+    def override_session():
+        try:
+            yield db_session
+        finally:
+            db_session.rollback()
+
+    app.dependency_overrides[get_session] = override_session
+    client = TestClient(app)
+    try:
+        yield client
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+        client.close()
+
+
+def _fake_generation_result(include_html: bool) -> GenerationResult:
+    metadata = GenerationMetadata(
+        reference_date=date(2024, 1, 1),
+        cutoff_date=date(2024, 1, 1),
+        era="4.0",
+        year=2024,
+        notes=[],
+    )
+    generated = GeneratedSetlist(
+        sets=[SetSegment(label="Set 1", songs=["Maze"])],
+        encore=None,
+        metadata=metadata,
+    )
+    segments = [
+        SegmentDetails(
+            label="Set 1",
+            songs=["Maze"],
+            tracks=[SongDisplay(title="Maze")],
+            duration_seconds=None,
+        )
+    ]
+    html_artifact = HTMLArtifact(markup="<html>maze</html>", stylesheet="phish-setlist.css") if include_html else None
+    return GenerationResult(
+        seed=99,
+        generated_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        generated=generated,
+        segments=segments,
+        encore=None,
+        playlist=None,
+        html=html_artifact,
+    )
+
+
+def test_post_generate_defaults_to_json(api_client: TestClient, mocker: MockerFixture) -> None:
+    mock_generate = mocker.patch(
+        "phish_setlist_maker.api.generate_show",
+        return_value=_fake_generation_result(include_html=False),
+    )
+
+    response = api_client.post("/generate", json={"include_playlist": False, "include_html": False})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    payload = response.json()
+    assert payload["seed"] == 99
+    mock_request: GenerationRequest = mock_generate.call_args.args[1]
+    assert mock_request.include_playlist is False
+    assert mock_request.include_html is False
+
+
+def test_post_generate_negotiates_html(api_client: TestClient, mocker: MockerFixture) -> None:
+    mock_generate = mocker.patch(
+        "phish_setlist_maker.api.generate_show",
+        return_value=_fake_generation_result(include_html=True),
+    )
+
+    response = api_client.post(
+        "/generate",
+        json={"include_playlist": False, "include_html": False},
+        headers={"Accept": "text/html"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "<html>maze</html>" in response.text
+    mock_request: GenerationRequest = mock_generate.call_args.args[1]
+    assert mock_request.include_playlist is True
+    assert mock_request.include_html is True

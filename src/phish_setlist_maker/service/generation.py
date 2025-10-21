@@ -6,26 +6,30 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 import logging
 from random import Random, SystemRandom
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
-import re
-
-import requests
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..constants import ERA_DEFINITIONS
 from ..generator import GeneratedSetlist, SetlistGenerator, random_set_lengths
 from ..generator.core import SetSegment
-from ..generator.html import PlaylistLink, PlaylistSection, build_html_markup
-from ..models import Show, Song, SongTrack, Track
-
+from ..generator.html import build_html_markup
+from ..models import Show, SongTrack, Track
+from .catalog import (
+    SongCatalog,
+    SongCatalogEntry,
+    build_song_catalog,
+    determine_origin_from_entry,
+    normalize_title,
+    split_song_titles,
+)
+from .errors import PlaylistServiceError
+from .playlist import build_playlist_sections
+from .models import GenerationResult, HTMLArtifact, PlaylistArtifacts, SegmentDetails, SongDisplay
+from .tracks import CandidateTrack, fetch_remote_track_metadata, query_tracks_for_song
+from .segments import expand_tracks, segment_duration_seconds
 
 logger = logging.getLogger("uvicorn.error")
-
-
-class PlaylistServiceError(RuntimeError):
-    """Raised when auxiliary playlist services are unavailable."""
 
 
 @dataclass(frozen=True)
@@ -46,87 +50,6 @@ class GenerationRequest:
     fail_on_playlist_error: bool = False
     html_stylesheet_href: Optional[str] = None
     html_script_src: Optional[str] = None
-
-
-@dataclass(frozen=True)
-class SongDisplay:
-    """Presentation-friendly metadata for a single song appearance."""
-
-    title: str
-    mp3_url: Optional[str] = None
-    duration_seconds: Optional[int] = None
-    origin: Optional[str] = None
-    show_date: Optional[str] = None
-
-    @property
-    def duration_label(self) -> Optional[str]:
-        if self.duration_seconds is None or self.duration_seconds < 0:
-            return None
-        minutes, seconds = divmod(self.duration_seconds, 60)
-        return f"{minutes}:{seconds:02d}"
-
-
-@dataclass(slots=True)
-class SegmentDetails:
-    """Expanded view of a generated segment (raw titles + flattened songs)."""
-
-    label: str
-    songs: List[str]
-    tracks: List[SongDisplay]
-
-
-@dataclass(slots=True)
-class PlaylistArtifacts:
-    """In-memory representation of playlist data and track metadata."""
-
-    sections: List[Tuple[str, List[SongDisplay]]]
-    first_track_url: Optional[str]
-    m3u_text: Optional[str]
-    missing_tracks: List[str]
-
-
-@dataclass(slots=True)
-class HTMLArtifact:
-    """Rendered HTML markup plus reference to the stylesheet."""
-
-    markup: str
-    stylesheet: str = "phish-setlist.css"
-
-
-@dataclass(slots=True)
-class GenerationResult:
-    """Full output of the generator, including optional media artifacts."""
-
-    seed: int
-    generated_at: datetime
-    generated: GeneratedSetlist
-    segments: List[SegmentDetails]
-    encore: Optional[SegmentDetails]
-    playlist: Optional[PlaylistArtifacts]
-    html: Optional[HTMLArtifact]
-
-
-@dataclass(frozen=True)
-class SongCatalogEntry:
-    slug: str
-    title: str
-    original: bool
-    artist: Optional[str]
-    alias: Optional[str]
-
-
-@dataclass
-class SongCatalog:
-    by_title: Dict[str, SongCatalogEntry]
-    by_slug: Dict[str, SongCatalogEntry]
-
-
-@dataclass(frozen=True)
-class CandidateTrack:
-    track_id: int
-    slug: Optional[str]
-    duration: Optional[int]
-    show_date: Optional[date]
 
 
 def infer_default_era(year: Optional[int]) -> Optional[str]:
@@ -160,192 +83,6 @@ def resolve_era(year: Optional[int], requested_era: Optional[str]) -> Tuple[Opti
     return inferred, None
 
 
-def normalize_title(title: str) -> str:
-    return "".join(ch for ch in title.lower() if ch.isalnum())
-
-
-def split_song_titles(raw_title: str) -> Iterable[str]:
-    delimiters = ("->", ">")
-    if any(marker in raw_title for marker in delimiters):
-        parts = raw_title.replace("->", ">").split(">")
-        for part in parts:
-            stripped = part.strip()
-            if stripped:
-                yield stripped
-    else:
-        stripped = raw_title.strip()
-        if stripped:
-            yield stripped
-
-
-def determine_origin_from_entry(entry: SongCatalogEntry) -> Optional[str]:
-    if entry.original:
-        return "Phish original"
-
-    artist = entry.artist.strip() if entry.artist else None
-    if artist:
-        if artist.lower() == "phish":
-            return "Phish original"
-        return f"Originally by {artist}"
-
-    if entry.alias:
-        alias = _parse_aliases(entry.alias)
-        if alias:
-            return f"Alias: {alias[0]}"
-
-    return None
-
-
-def _parse_aliases(raw_alias: Optional[str]) -> List[str]:
-    if not raw_alias:
-        return []
-    # Alias fields occasionally contain multiple entries separated by punctuation.
-    parts = re.split(r"[;/,]+", raw_alias)
-    return [part.strip() for part in parts if part.strip()]
-
-
-def build_song_catalog(db_session: Session) -> SongCatalog:
-    """Construct lookups for titles/aliases to song metadata."""
-
-    by_title: Dict[str, SongCatalogEntry] = {}
-    by_slug: Dict[str, SongCatalogEntry] = {}
-
-    stmt = select(Song.title, Song.alias, Song.slug, Song.original, Song.artist)
-    for title, alias, slug, original, artist in db_session.execute(stmt):
-        if not slug:
-            continue
-        entry = SongCatalogEntry(
-            slug=slug,
-            title=title,
-            original=bool(original),
-            artist=artist,
-            alias=alias,
-        )
-        by_slug[slug] = entry
-
-        normalized = normalize_title(title)
-        if normalized and normalized not in by_title:
-            by_title[normalized] = entry
-
-        for alt in _parse_aliases(alias):
-            normalized_alias = normalize_title(alt)
-            if normalized_alias and normalized_alias not in by_title:
-                by_title[normalized_alias] = entry
-
-    return SongCatalog(by_title=by_title, by_slug=by_slug)
-
-
-def _query_tracks_for_song(db_session: Session, song_slug: str, limit: int = 25) -> List[CandidateTrack]:
-    stmt = (
-        select(
-            Track.id,
-            Track.slug,
-            Track.duration,
-            Show.date.label("show_date"),
-        )
-        .join(SongTrack, SongTrack.track_id == Track.id)
-        .join(Song, SongTrack.song_id == Song.id)
-        .outerjoin(Show, Show.id == Track.show_id)
-        .where(Song.slug == song_slug)
-        .order_by(Track.likes_count.desc(), Track.id.desc())
-        .limit(limit)
-    )
-    rows = db_session.execute(stmt).all()
-    return [
-        CandidateTrack(
-            track_id=row.id,
-            slug=row.slug,
-            duration=row.duration,
-            show_date=row.show_date,
-        )
-        for row in rows
-        if row.id is not None
-    ]
-
-
-def _fetch_remote_track_metadata(
-    *,
-    track_id: Optional[int],
-    song_slug: str,
-    rng: Random,
-    strict: bool,
-) -> Tuple[Optional[str], Optional[int], Optional[str]]:
-    last_error: Optional[Exception] = None
-
-    if track_id is not None:
-        logger.info(
-            "phish.in request endpoint=%s url=%s track_id=%s",
-            "tracks/{id}",
-            f"https://phish.in/api/v2/tracks/{track_id}.json",
-            track_id,
-        )
-        url = f"https://phish.in/api/v2/tracks/{track_id}.json"
-        try:
-            resp = requests.get(url, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            if isinstance(data, dict) and "track" in data:
-                data = data.get("track", {})
-            mp3_url = data.get("mp3_url") or data.get("mp3")
-            duration_raw = data.get("duration")
-            duration_seconds = int(duration_raw // 1000) if isinstance(duration_raw, (int, float)) else None
-            show_date = data.get("show_date")
-            if mp3_url:
-                logger.info(
-                    "phish.in response endpoint=tracks/{id} status=%s mp3=%s",
-                    resp.status_code,
-                    bool(mp3_url),
-                )
-                return mp3_url, duration_seconds, show_date
-            else:
-                logger.warning(
-                    "phish.in response missing mp3_url endpoint=tracks/{id} status=%s track_id=%s",
-                    resp.status_code,
-                    track_id,
-                )
-        except requests.RequestException as exc:
-            last_error = exc
-
-    params = {
-        "song_slug": song_slug,
-        "per_page": 30,
-        "sort": "likes_count:desc",
-        "audio_status": "complete_or_partial",
-    }
-    logger.info(
-        "phish.in request endpoint=%s url=%s params=%s",
-        "tracks",
-        "https://phish.in/api/v2/tracks.json",
-        params,
-    )
-    try:
-        resp = requests.get("https://phish.in/api/v2/tracks.json", params=params, timeout=10)
-        resp.raise_for_status()
-    except requests.RequestException as exc:
-        if strict and last_error is None:
-            raise PlaylistServiceError(f"Unable to fetch track metadata for song '{song_slug}'.") from exc
-        return None, None, None
-
-    tracks = resp.json().get("tracks", [])
-    candidates = [track for track in tracks if track.get("mp3_url")]
-    logger.info(
-        "phish.in response endpoint=tracks status=%s candidates=%s",
-        resp.status_code,
-        len(candidates),
-    )
-    if not candidates:
-        if strict and last_error is not None:
-            raise PlaylistServiceError(f"Unable to fetch track metadata for track id '{track_id}'.") from last_error
-        return None, None, None
-
-    selection = rng.choice(candidates)
-    mp3_url = selection.get("mp3_url")
-    duration_raw = selection.get("duration")
-    duration_seconds = int(duration_raw // 1000) if isinstance(duration_raw, (int, float)) else None
-    show_date = selection.get("show_date")
-    return mp3_url, duration_seconds, show_date
-
-
 def _select_track_display(
     db_session: Session,
     *,
@@ -355,7 +92,7 @@ def _select_track_display(
     strict: bool,
     missing: Dict[str, int],
 ) -> Optional[SongDisplay]:
-    candidates = _query_tracks_for_song(db_session, entry.slug)
+    candidates = query_tracks_for_song(db_session, entry.slug)
     if not candidates:
         missing[song_title] = missing.get(song_title, 0) + 1
         if strict:
@@ -373,7 +110,7 @@ def _select_track_display(
         selection.slug,
     )
 
-    mp3_url, remote_duration, remote_show_date = _fetch_remote_track_metadata(
+    mp3_url, remote_duration, remote_show_date = fetch_remote_track_metadata(
         track_id=selection.track_id,
         song_slug=entry.slug,
         rng=rng,
@@ -513,53 +250,6 @@ def prepare_playlist_artifacts(
     )
 
 
-def _expand_tracks(raw_songs: Sequence[str], track_lookup: Dict[str, SongDisplay]) -> List[SongDisplay]:
-    expanded: List[SongDisplay] = []
-    for raw_song in raw_songs:
-        for title in split_song_titles(raw_song):
-            key = normalize_title(title)
-            track = track_lookup.get(key)
-            if track:
-                expanded.append(track)
-            else:
-                expanded.append(SongDisplay(title=title))
-    return expanded
-
-
-def _segments_to_playlist_sections(
-    segments: Sequence[SegmentDetails],
-    encore: Optional[SegmentDetails],
-    *,
-    include_audio_links: bool,
-) -> List[PlaylistSection]:
-    sections: List[PlaylistSection] = []
-    for segment in segments:
-        links = [
-            PlaylistLink(
-                title=song.title,
-                mp3_url=song.mp3_url if include_audio_links else None,
-                duration=song.duration_label,
-                origin=song.origin,
-            )
-            for song in segment.tracks
-        ]
-        sections.append(PlaylistSection(title=segment.label, tracks=links))
-
-    if encore:
-        encore_links = [
-            PlaylistLink(
-                title=song.title,
-                mp3_url=song.mp3_url if include_audio_links else None,
-                duration=song.duration_label,
-                origin=song.origin,
-            )
-            for song in encore.tracks
-        ]
-        sections.append(PlaylistSection(title=encore.label, tracks=encore_links))
-
-    return sections
-
-
 def generate_show(session: Session, request: GenerationRequest) -> GenerationResult:
     """Generate a setlist and any requested media artifacts."""
 
@@ -639,7 +329,8 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
         SegmentDetails(
             label=segment.label,
             songs=list(segment.songs),
-            tracks=_expand_tracks(segment.songs, track_lookup),
+            tracks=expand_tracks(segment.songs, track_lookup),
+            duration_seconds=segment_duration_seconds(segment, track_lookup),
         )
         for segment in generated.sets
     ]
@@ -649,7 +340,8 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
         encore_details = SegmentDetails(
             label=generated.encore.label,
             songs=list(generated.encore.songs),
-            tracks=_expand_tracks(generated.encore.songs, track_lookup),
+            tracks=expand_tracks(generated.encore.songs, track_lookup),
+            duration_seconds=segment_duration_seconds(generated.encore, track_lookup),
         )
 
     if request.include_playlist and playlist_artifacts:
@@ -661,7 +353,7 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
     html_artifact: Optional[HTMLArtifact] = None
     if request.include_html:
         include_audio_links = bool(request.include_playlist and playlist_artifacts)
-        sections_for_html = _segments_to_playlist_sections(
+        sections_for_html = build_playlist_sections(
             segments_details,
             encore_details,
             include_audio_links=include_audio_links,
