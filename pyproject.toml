@@ -40,3 +40,7 @@ responses = "^0.25.3"
 [tool.pytest.ini_options]
 addopts = "-q"
 pythonpath = ["src"]
+
+[tool.poetry.scripts]
+server = "phish_setlist_maker.api.cli:start_server"
+http-start = "phish_setlist_maker.api.cli:start_server"
