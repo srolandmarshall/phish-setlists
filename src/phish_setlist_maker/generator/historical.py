@@ -41,7 +41,9 @@ def normalize_set_label(label: str) -> str:
 
     normalized = label.strip()
     for canonical, aliases in SET_ALIASES.items():
-        if normalized in aliases:
+        lowered = normalized.lower()
+        alias_lower = tuple(alias.lower() for alias in aliases)
+        if lowered in alias_lower:
             return canonical
     return normalized.lower()
 
