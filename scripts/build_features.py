@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Build feature tables for ML models from analytics data."""
+
+import argparse
+from pathlib import Path
+
+import pandas as pd
+
+from phish_setlist_maker.analysis.features import (
+    build_song_features,
+    compute_set_entropy,
+    compute_transition_lift,
+    identify_multi_home_songs,
+)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("data/analytics"),
+        help="Directory with source Parquet files",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=Path("data/analytics/features"),
+        help="Output directory for feature tables",
+    )
+    args = parser.parse_args()
+
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+
+    print("Loading source data...")
+    freq_df = pd.read_parquet(args.data_dir / "song_set_frequencies.parquet")
+    transitions_df = pd.read_parquet(args.data_dir / "song_transitions.parquet")
+
+    print(f"  → {len(freq_df)} frequency records")
+    print(f"  → {len(transitions_df)} transitions")
+
+    print("\nComputing set entropy...")
+    entropy = compute_set_entropy(freq_df)
+    entropy_path = args.out_dir / "song_set_entropy.parquet"
+    entropy.to_parquet(entropy_path, index=False)
+    print(f"  → {entropy_path} ({len(entropy)} songs)")
+
+    print("\nIdentifying multi-home songs...")
+    multi_home = identify_multi_home_songs(freq_df, min_probability=0.15)
+    multi_home_path = args.out_dir / "multi_home_songs.parquet"
+    multi_home.to_parquet(multi_home_path, index=False)
+    print(f"  → {multi_home_path} ({len(multi_home)} songs)")
+    print(f"  Examples: {', '.join(multi_home.head(5)['song_effective_title'].tolist())}")
+
+    print("\nComputing transition lift...")
+    # Need song counts per set for lift calculation
+    song_counts = (
+        freq_df.groupby(["song_effective_title", "canonical_set"])["count"]
+        .first()
+        .reset_index()
+    )
+    transitions_with_lift = compute_transition_lift(transitions_df, song_counts)
+    lift_path = args.out_dir / "transition_lift.parquet"
+    transitions_with_lift.to_parquet(lift_path, index=False)
+    print(f"  → {lift_path}")
+    
+    # Show top lift transitions
+    top_lift = transitions_with_lift.nlargest(5, "lift")
+    print(f"  Top lift transitions:")
+    for _, row in top_lift.iterrows():
+        print(f"    {row['from_title']} → {row['to_title']} (lift={row['lift']:.2f})")
+
+    print("\nBuilding comprehensive song features...")
+    song_features = build_song_features(freq_df, transitions_df)
+    features_path = args.out_dir / "song_features.parquet"
+    song_features.to_parquet(features_path, index=False)
+    print(f"  → {features_path} ({len(song_features)} songs)")
+    print(f"  Columns: {', '.join(song_features.columns.tolist())}")
+
+    print("\n✅ Feature engineering complete!")
+    print(f"   All outputs in {args.out_dir}/")
+
+
+if __name__ == "__main__":
+    main()

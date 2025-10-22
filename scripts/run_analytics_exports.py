@@ -14,6 +14,14 @@ from build_trend_tables import (
     build_song_year_counts,
 )
 
+from phish_setlist_maker.analysis.database import (
+    build_venue_tendencies,
+    load_show_dataframe,
+    load_tour_dataframe,
+    load_venue_dataframe,
+)
+from phish_setlist_maker.db import session_scope, analytics_session_scope
+
 
 def _ensure_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
@@ -96,6 +104,20 @@ def main() -> None:
 
     intro_outro_counts = build_intro_outro_counts(tracks)
     intro_outro_counts.to_parquet(trend_dir / "intro_outro_counts.parquet", index=False)
+
+    # Venue and tour analysis
+    print("Building venue and tour analysis...")
+    scope = session_scope if args.use_primary else analytics_session_scope
+    with scope() as session:
+        venues = load_venue_dataframe(session)
+        tours = load_tour_dataframe(session)
+        shows = load_show_dataframe(session)
+        
+    venues.to_parquet(base_dir / "venues.parquet", index=False)
+    tours.to_parquet(base_dir / "tours.parquet", index=False)
+    
+    venue_tendencies = build_venue_tendencies(tracks, shows)
+    venue_tendencies.to_parquet(base_dir / "venue_tendencies.parquet", index=False)
 
     print("Analytics exports complete.")
 
