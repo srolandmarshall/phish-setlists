@@ -44,8 +44,11 @@ def generate_html(
     year: Optional[int] = Query(None),
     num_sets: int = Query(2, ge=2, le=3),
     include_encore: bool = Query(True),
-    allow_previous_show: bool = Query(False),
+    allow_previous_show: bool = Query(True),
     seed: Optional[int] = Query(None),
+    use_ml_features: bool = Query(True, description="Enable ML-driven feature adjustments"),
+    ml_placement_weight: float = Query(0.3, ge=0.0, le=1.0, description="Weight for ML placement probabilities"),
+    ml_transition_bonus: float = Query(0.1, ge=0.0, le=1.0, description="Bonus for ML transition lifts"),
     session: Session = Depends(get_session),
 ) -> HTMLResponse:
     payload = GenerateRequestModel(
@@ -58,6 +61,9 @@ def generate_html(
         seed=seed,
         include_playlist=True,
         include_html=True,
+        use_ml_features=use_ml_features,
+        ml_placement_weight=ml_placement_weight,
+        ml_transition_bonus=ml_transition_bonus,
     )
 
     generation_request = build_generation_request(

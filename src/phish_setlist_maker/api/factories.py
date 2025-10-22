@@ -32,4 +32,7 @@ def build_generation_request(
         fail_on_playlist_error=fail_on_playlist_error,
         html_stylesheet_href=stylesheet_href,
         html_script_src=script_src,
+        use_ml_features=model.use_ml_features,
+        ml_placement_weight=model.ml_placement_weight,
+        ml_transition_bonus=model.ml_transition_bonus,
     )

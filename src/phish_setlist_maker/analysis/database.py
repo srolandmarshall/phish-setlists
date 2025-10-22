@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..constants import ERA_DEFINITIONS
 from ..generator.historical import normalize_set_label
-from ..models import Show, Song, SongTrack, Track
+from ..models import Show, Song, SongTrack, Tour, Track, Venue
 
 
 def _execute_dataframe(session: Session, stmt: Select) -> pd.DataFrame:
@@ -215,6 +215,77 @@ def _infer_era(show_date: Optional[pd.Timestamp]) -> Optional[str]:
         if definition.contains(show_date.date()):
             return label
     return None
+def load_venue_dataframe(session: Session) -> pd.DataFrame:
+    """Return venue metadata with show counts."""
+    stmt = select(
+        Venue.id.label("venue_id"),
+        Venue.name.label("venue_name"),
+        Venue.city,
+        Venue.state,
+        Venue.country,
+        Venue.slug.label("venue_slug"),
+        Venue.latitude,
+        Venue.longitude,
+        Venue.shows_count,
+    )
+    return _execute_dataframe(session, stmt)
+
+
+def load_tour_dataframe(session: Session) -> pd.DataFrame:
+    """Return tour metadata with date ranges."""
+    stmt = select(
+        Tour.id.label("tour_id"),
+        Tour.name.label("tour_name"),
+        Tour.starts_on,
+        Tour.ends_on,
+        Tour.slug.label("tour_slug"),
+        Tour.shows_count,
+    )
+    frame = _execute_dataframe(session, stmt)
+    if not frame.empty:
+        frame["starts_on"] = pd.to_datetime(frame["starts_on"])
+        frame["ends_on"] = pd.to_datetime(frame["ends_on"])
+        frame["duration_days"] = (frame["ends_on"] - frame["starts_on"]).dt.days
+    return frame
+
+
+def build_venue_tendencies(tracks_df: pd.DataFrame, shows_df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate venue-level statistics from tracks + shows."""
+    if tracks_df.empty or shows_df.empty:
+        return pd.DataFrame(
+            columns=["venue_id", "show_count", "track_count", "avg_show_duration", "top_songs"]
+        )
+    
+    merged = tracks_df.merge(shows_df[["show_id", "venue_id"]], on="show_id", how="left")
+    merged = merged.dropna(subset=["venue_id"])
+    
+    venue_stats = (
+        merged.groupby("venue_id")
+        .agg(
+            show_count=("show_id", "nunique"),
+            track_count=("track_id", "count"),
+            total_duration=("duration_seconds", "sum"),
+        )
+        .reset_index()
+    )
+    
+    venue_stats["avg_show_duration"] = venue_stats["total_duration"] / venue_stats["show_count"]
+    
+    top_songs = (
+        merged.groupby(["venue_id", "song_effective_title"])
+        .size()
+        .reset_index(name="play_count")
+        .sort_values(["venue_id", "play_count"], ascending=[True, False])
+        .groupby("venue_id")
+        .head(5)
+        .groupby("venue_id")["song_effective_title"]
+        .apply(list)
+        .reset_index(name="top_songs")
+    )
+    
+    return venue_stats.merge(top_songs, on="venue_id", how="left").drop(columns=["total_duration"])
+
+
 def _canonical_for_analysis(label: Optional[str]) -> Optional[str]:
     if not label:
         return None

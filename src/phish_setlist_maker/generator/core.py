@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
 from random import Random
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..analysis.feature_store import FeatureStore
 from ..constants import (
     DEFAULT_SET_DURATION_TARGETS,
     DEFAULT_SET_LENGTHS,
@@ -70,11 +72,28 @@ class SetlistGenerator:
         *,
         adjacency_bonus: float = 0.05,
         adjacency_min_support: int = 2,
+        use_ml_features: bool = False,
+        ml_placement_weight: float = 0.3,
+        ml_transition_bonus: float = 0.1,
+        features_dir: Optional[Path] = None,
     ):
         self.session = session
         self.rng = rng or Random()
         self._adjacency_bonus = max(0.0, adjacency_bonus)
         self._adjacency_min_support = max(0, adjacency_min_support)
+        self._use_ml_features = use_ml_features
+        self._ml_placement_weight = ml_placement_weight
+        self._ml_transition_bonus = ml_transition_bonus
+        
+        self._feature_store: Optional[FeatureStore] = None
+        if use_ml_features:
+            if features_dir is None:
+                # Default to data/analytics/features relative to project root
+                features_dir = Path(__file__).resolve().parent.parent.parent.parent / "data" / "analytics" / "features"
+            if not features_dir.exists():
+                raise RuntimeError(f"ML features directory not found: {features_dir}")
+            self._feature_store = FeatureStore(features_dir)
+            self._feature_store.load()
 
     def generate(
         self,
@@ -477,6 +496,7 @@ class SetlistGenerator:
                 used_songs,
                 previous_song=prev,
                 adjacency_map=adjacency_map,
+                target_set=target_set,
             )
             if not choice:
                 break
@@ -650,6 +670,7 @@ class SetlistGenerator:
         *,
         previous_song: Optional[str] = None,
         adjacency_map: Optional[Dict[str, Dict[str, int]]] = None,
+        target_set: Optional[str] = None,
     ) -> Optional[str]:
         available = [freq for freq in pool if freq.title not in used_songs]
         if not available:
@@ -659,6 +680,18 @@ class SetlistGenerator:
             (freq, float(freq.weight)) for freq in available
         ]
 
+        # Apply ML placement probability adjustments
+        if self._use_ml_features and self._feature_store and target_set:
+            for idx, (freq, weight) in enumerate(weighted_candidates):
+                placement_prob = self._feature_store.get_placement_probability(
+                    freq.title, target_set
+                )
+                if placement_prob > 0:
+                    # Blend historical weight with ML placement probability
+                    ml_adjusted = weight * (1 - self._ml_placement_weight) + placement_prob * self._ml_placement_weight
+                    weighted_candidates[idx] = (freq, ml_adjusted)
+
+        # Apply historical adjacency bonus
         if previous_song and adjacency_map:
             neighbors = adjacency_map.get(previous_song)
             if neighbors:
@@ -678,6 +711,16 @@ class SetlistGenerator:
                             normalized = neighbor_weight / max_neighbor
                             boost = 1.0 + self._adjacency_bonus * normalized
                             weighted_candidates[idx] = (freq, weight * boost)
+
+        # Apply ML transition lift bonus
+        if self._use_ml_features and self._feature_store and previous_song:
+            for idx, (freq, weight) in enumerate(weighted_candidates):
+                transition = self._feature_store.get_transition_lift(previous_song, freq.title)
+                if transition and transition.lift > 2.0:  # Only boost strong transitions
+                    # Normalize lift to reasonable range (2-10x -> 0-1)
+                    normalized_lift = min((transition.lift - 2.0) / 8.0, 1.0)
+                    boost = 1.0 + self._ml_transition_bonus * normalized_lift
+                    weighted_candidates[idx] = (freq, weight * boost)
 
         total_weight = sum(weight for _, weight in weighted_candidates)
         if total_weight <= 0:

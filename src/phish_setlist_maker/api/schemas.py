@@ -74,6 +74,9 @@ class GenerateRequestModel(BaseModel):
     seed: Optional[int] = None
     include_playlist: bool = True
     include_html: bool = False
+    use_ml_features: bool = Field(default=True, description="Enable ML-driven feature adjustments")
+    ml_placement_weight: float = Field(default=0.3, ge=0.0, le=1.0, description="Weight for ML placement probabilities (0-1)")
+    ml_transition_bonus: float = Field(default=0.1, ge=0.0, le=1.0, description="Bonus for ML transition lift scores (0-1)")
 
     @field_validator("set_lengths")
     @classmethod

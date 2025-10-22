@@ -98,6 +98,9 @@ class GenerationRequest:
     fail_on_playlist_error: bool = False
     html_stylesheet_href: Optional[str] = None
     html_script_src: Optional[str] = None
+    use_ml_features: bool = True
+    ml_placement_weight: float = 0.3
+    ml_transition_bonus: float = 0.1
 
 
 def infer_default_era(year: Optional[int]) -> Optional[str]:
@@ -313,7 +316,13 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
     if request.year is not None and request.year < current_year and not request.allow_previous_show:
         allow_previous_show = True
 
-    generator = SetlistGenerator(session, rng=rng)
+    generator = SetlistGenerator(
+        session,
+        rng=rng,
+        use_ml_features=request.use_ml_features,
+        ml_placement_weight=request.ml_placement_weight,
+        ml_transition_bonus=request.ml_transition_bonus,
+    )
 
     if request.set_lengths:
         set_lengths = dict(request.set_lengths)
