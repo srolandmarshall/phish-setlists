@@ -4,6 +4,8 @@ A small, opinionated learning project for exploring Phish setlists and experimen
 
 This repository contains utilities, a smart generator, and notebooks used while learning Python, SQLAlchemy, and data-driven heuristics for assembling setlists. It is intentionally lightweight and best-suited for local experimentation.
 
+**Data Attribution**: All Phish show and setlist data is sourced from [Phish.in](https://phish.in/), a comprehensive archive of Phish recordings and setlists. This project would not be possible without their incredible work maintaining this community resource. Phish.in data is provided under the MIT License.
+
 ## Highlights
 
 - **Generate synthetic setlists** with companion playlists (M3U) and HTML summaries
@@ -231,9 +233,29 @@ This is a small personal project, but contributions are welcome. A few guideline
 - Use imperative, concise commit messages (e.g. `Add random set-length sampler`).
 - Reference related issues in PRs with `Refs #NN` or `Fixes #NN`.
 
+## Data Sources & Attribution
+
+This project relies on data from **[Phish.in](https://phish.in/)**, which provides comprehensive Phish setlist and performance information through their API. 
+
+- **Phish.in API**: https://phish.in/api-docs
+- **License**: MIT License
+- **Copyright**: © Phish.in contributors
+
+We are deeply grateful to the Phish.in community for maintaining this invaluable resource. All setlist data, show dates, venue information, and song metadata used in this project originates from their archive.
+
 ## License
 
-No license file is present in this repository. If you want to reuse code from here, please ask or add an explicit license.
+This project code is provided as-is for educational and personal use. The underlying data is provided by Phish.in under the MIT License.
+
+**MIT License (Phish.in Data)**
+
+Copyright (c) Phish.in contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ---
 

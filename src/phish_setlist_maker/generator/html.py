@@ -45,6 +45,9 @@ def _render_context(generated: GeneratedSetlist, generated_at: datetime) -> str:
         "        <ul>\n"
         f"{rows}\n"
         "        </ul>\n"
+        '        <p style="margin-top: 1em; font-size: 0.9em; color: #666;">\n'
+        '          Data source: <a href="https://phish.in/" target="_blank">Phish.in</a> (MIT License)\n'
+        "        </p>\n"
         "      </section>\n"
     )
 
