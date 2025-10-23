@@ -1,5 +1,7 @@
 .env*
-data
+data/*
+!data/analytics/
+!data/analytics/features/
 
 # Python artifacts
 __pycache__/
