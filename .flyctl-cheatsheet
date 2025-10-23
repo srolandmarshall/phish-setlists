@@ -1,0 +1,43 @@
+# Fly.io Quick Reference for phish-setlist-maker
+
+# View live logs (streaming)
+flyctl logs -a phish-setlist-maker
+
+# View recent logs (no streaming)
+flyctl logs -a phish-setlist-maker --no-tail
+
+# Check app status
+flyctl status -a phish-setlist-maker
+
+# SSH into the running container
+flyctl ssh console -a phish-setlist-maker
+
+# Deploy updates
+flyctl deploy
+
+# Scale memory (if needed)
+flyctl scale memory 512 -a phish-setlist-maker
+
+# Keep 1 machine always running (no cold starts, ~$2/mo)
+flyctl scale count 1 -a phish-setlist-maker
+
+# View secrets/environment variables
+flyctl secrets list -a phish-setlist-maker
+
+# Set a new secret
+flyctl secrets set MY_VAR=value -a phish-setlist-maker
+
+# Open app in browser
+flyctl open -a phish-setlist-maker
+
+# View metrics dashboard
+flyctl dashboard metrics -a phish-setlist-maker
+
+# Database commands
+flyctl postgres list
+flyctl postgres connect -a phish-setlist-db
+flyctl proxy 5432 -a phish-setlist-db
+
+# Destroy everything (cleanup)
+flyctl apps destroy phish-setlist-maker
+flyctl apps destroy phish-setlist-db

@@ -33,7 +33,27 @@ class DatabaseSettings:
         return url.render_as_string(hide_password=False)
 
 
+def _parse_database_url(url: str) -> DatabaseSettings:
+    """Parse DATABASE_URL into DatabaseSettings."""
+    from urllib.parse import urlparse
+    
+    parsed = urlparse(url)
+    return DatabaseSettings(
+        user=parsed.username or "",
+        password=parsed.password or "",
+        host=parsed.hostname or "localhost",
+        port=parsed.port or 5432,
+        name=parsed.path.lstrip("/") if parsed.path else "phish-setlist-maker",
+    )
+
+
 def _build_database_settings(prefix: str, *, fallback: DatabaseSettings | None = None) -> DatabaseSettings:
+    # Check for DATABASE_URL first (common in cloud deployments)
+    if prefix == "DB":
+        database_url = os.getenv("DATABASE_URL")
+        if database_url:
+            return _parse_database_url(database_url)
+    
     user_key = f"{prefix}_USER"
     password_key = f"{prefix}_PASS"
     host_key = f"{prefix}_HOST"
