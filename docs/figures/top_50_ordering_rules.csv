@@ -1,0 +1,51 @@
+song_a,song_b,set_label,cooccurrence_count,a_before_b_count,a_before_b_ratio,is_ordering_mandatory
+Mike's Song,Weekapaug Groove,set2,351,349,0.9943019943019943,True
+I Am Hydrogen,Weekapaug Groove,set2,209,205,0.9808612440191388,True
+Mike's Song,I Am Hydrogen,set2,205,201,0.9804878048780488,True
+Mike's Song,Weekapaug Groove,set1,160,159,0.99375,True
+I Am Hydrogen,Weekapaug Groove,set1,130,127,0.9769230769230769,True
+Mike's Song,I Am Hydrogen,set1,129,128,0.9922480620155039,True
+Mike's Song,Hold Your Head Up,set2,106,105,0.9905660377358491,True
+You Enjoy Myself,Hold Your Head Up,set2,101,101,1.0,True
+Tweezer,Hold Your Head Up,set2,100,100,1.0,True
+Weekapaug Groove,Hold Your Head Up,set2,98,98,1.0,True
+Colonel Forbin's Ascent,Fly Famous Mockingbird,set1,96,93,0.96875,True
+Hold Your Head Up,Hold Your Head Up,set2,96,96,1.0,True
+Big Ball Jam,Hold Your Head Up,set2,84,83,0.9880952380952381,True
+Tweezer,Tweezer Reprise,set2,82,82,1.0,True
+The Oh Kee Pa Ceremony,Suzy Greenberg,set1,78,77,0.9871794871794872,True
+The Horse,Silent in the Morning,set2,75,71,0.9466666666666667,True
+I Am Hydrogen,Hold Your Head Up,set2,74,74,1.0,True
+The Horse,Silent in the Morning,set1,72,65,0.9027777777777778,True
+Runaway Jim,Foam,set1,67,67,1.0,True
+Uncle Pen,Hold Your Head Up,set2,65,65,1.0,True
+Foam,Stash,set1,63,63,1.0,True
+Foam,Bouncing Around the Room,set1,63,63,1.0,True
+Foam,Cavern,set1,63,63,1.0,True
+Tweezer,You Enjoy Myself,set2,63,63,1.0,True
+Runaway Jim,Stash,set1,59,59,1.0,True
+Narration,Narration,set1,59,59,1.0,True
+Bouncing Around the Room,Run Like an Antelope,set1,56,56,1.0,True
+Poor Heart,Stash,set1,56,56,1.0,True
+Rift,Stash,set1,56,56,1.0,True
+The Oh Kee Pa Ceremony,Suzy Greenberg,set2,55,54,0.9818181818181818,True
+Sparkle,Stash,set1,55,55,1.0,True
+Tweezer,Harry Hood,set2,53,53,1.0,True
+Divided Sky,Cavern,set1,53,53,1.0,True
+Foam,Sparkle,set1,51,51,1.0,True
+Bouncing Around the Room,David Bowie,set1,51,50,0.9803921568627451,True
+Suzy Greenberg,Hold Your Head Up,set2,51,51,1.0,True
+Mike's Song,Simple,set2,51,51,1.0,True
+Bouncing Around the Room,Stash,set1,50,50,1.0,True
+Foam,Run Like an Antelope,set1,50,50,1.0,True
+Divided Sky,Run Like an Antelope,set1,49,49,1.0,True
+Foam,Divided Sky,set1,49,49,1.0,True
+Chalk Dust Torture,Stash,set1,49,49,1.0,True
+Hold Your Head Up,Love You,set2,49,17,0.3469387755102041,False
+The Landlady,Bouncing Around the Room,set1,48,48,1.0,True
+Simple,Weekapaug Groove,set2,48,48,1.0,True
+Foam,David Bowie,set1,48,48,1.0,True
+Llama,Hold Your Head Up,set2,48,48,1.0,True
+Reba,Run Like an Antelope,set1,47,47,1.0,True
+Stash,Cavern,set1,46,46,1.0,True
+Runaway Jim,Bouncing Around the Room,set1,46,46,1.0,True

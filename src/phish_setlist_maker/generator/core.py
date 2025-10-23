@@ -94,6 +94,41 @@ class SetlistGenerator:
                 raise RuntimeError(f"ML features directory not found: {features_dir}")
             self._feature_store = FeatureStore(features_dir)
             self._feature_store.load()
+        
+        # Load excluded songs (always loaded, not just for ML)
+        self._excluded_songs: Set[str] = self._load_excluded_songs()
+
+    def _load_excluded_songs(self) -> Set[str]:
+        """Load list of songs to exclude from generation (situational, meta, technical)."""
+        excluded = set()
+        
+        # Try to load from CSV file
+        excluded_file = Path(__file__).resolve().parent.parent.parent.parent / "data" / "analytics" / "excluded_songs.csv"
+        
+        if excluded_file.exists():
+            try:
+                import csv
+                with open(excluded_file, 'r') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        excluded.add(row['song_title'])
+            except Exception:
+                pass  # Silently continue if file can't be read
+        
+        # Add hardcoded fallback exclusions (in case CSV missing)
+        excluded.update([
+            "Banter",
+            "Audience Chess Move",
+            "Happy Birthday to You",
+            "Soundcheck",
+            "Tuning",
+            "Intro",
+            "Outro",
+            "Jam",  # Generic jam, not Big Ball Jam
+            "Narration",
+        ])
+        
+        return excluded
 
     def generate(
         self,
@@ -200,6 +235,8 @@ class SetlistGenerator:
             )
 
         sets: List[SetSegment] = []
+        completed_sets_songs: Dict[str, List[str]] = {}  # Track songs in completed sets for cross-set dependencies
+        
         for idx in range(1, num_sets + 1):
             canonical_set = f"set{idx}"
             set_label = f"Set {idx}"
@@ -223,9 +260,11 @@ class SetlistGenerator:
                 longform_titles=set_longform,
                 adjacency_map=adjacency_map,
                 duration_target=duration_targets.get(canonical_set),
+                previous_sets_songs=completed_sets_songs,  # Pass previous sets for cross-set dependencies
             )
             metadata_notes.extend(set_notes)
             sets.append(SetSegment(label=set_label, songs=set_songs))
+            completed_sets_songs[canonical_set] = set_songs  # Track this set's songs
 
         encore_segment: Optional[SetSegment] = None
         if include_encore:
@@ -247,6 +286,7 @@ class SetlistGenerator:
                 longform_titles=encore_longform,
                 adjacency_map=encore_adjacency,
                 duration_target=duration_targets.get("encore"),
+                previous_sets_songs=completed_sets_songs,  # Pass all previous sets for cross-set dependencies
             )
             metadata_notes.extend(encore_notes)
             encore_segment = SetSegment(label="Encore", songs=encore_songs)
@@ -326,6 +366,7 @@ class SetlistGenerator:
         longform_titles: Set[str],
         adjacency_map: Optional[Dict[str, Dict[str, int]]],
         duration_target: Optional[Tuple[int, int]],
+        previous_sets_songs: Optional[Dict[str, List[str]]] = None,
     ) -> Tuple[List[str], List[str]]:
         notes: List[str] = []
         songs: List[str] = []
@@ -352,6 +393,7 @@ class SetlistGenerator:
                 adjacency_map=adjacency_map,
                 stats=stats,
                 duration_target=duration_target,
+                previous_sets_songs=previous_sets_songs,
             )
             if additional:
                 songs.extend(additional)
@@ -375,6 +417,7 @@ class SetlistGenerator:
                 adjacency_map=adjacency_map,
                 stats=stats,
                 duration_target=duration_target,
+                previous_sets_songs=previous_sets_songs,
             )
             if extra:
                 songs.extend(extra)
@@ -446,6 +489,7 @@ class SetlistGenerator:
         adjacency_map: Optional[Dict[str, Dict[str, int]]],
         stats: Optional[SegmentStatistics],
         duration_target: Optional[Tuple[int, int]],
+        previous_sets_songs: Optional[Dict[str, List[str]]] = None,
     ) -> Tuple[List[str], bool, float]:
         song_durations = stats.song_durations if stats else {}
         safety_factor = self._duration_safety_factor if duration_target else 1.0
@@ -500,6 +544,26 @@ class SetlistGenerator:
             )
             if not choice:
                 break
+
+            # NEW: Check ordering constraints (Phase 2.2)
+            if self._use_ml_features and self._feature_store:
+                # Check if adding this song would violate ordering
+                # (e.g., trying to add Mike's after Weekapaug already in set)
+                all_songs_so_far = list(base_songs) + selection
+                if self._feature_store.violates_ordering_constraint(all_songs_so_far, choice):
+                    # Skip this song, try another
+                    pool = [freq for freq in pool if freq.title != choice]
+                    continue
+                
+                # NEW: Check cross-set dependencies (Phase 2.2b - Tweezer Reprise)
+                # Example: Tweezer Reprise in encore requires Tweezer in earlier sets
+                if previous_sets_songs:
+                    if self._feature_store.violates_cross_set_dependency(
+                        choice, target_set, previous_sets_songs
+                    ):
+                        # Skip this song, try another
+                        pool = [freq for freq in pool if freq.title != choice]
+                        continue
 
             candidate_duration = song_durations.get(choice, fallback_duration) * safety_factor
             estimated_total = current_duration + candidate_duration
@@ -639,6 +703,9 @@ class SetlistGenerator:
         eligible_songs: Iterable[str],
     ) -> List[SongFrequency]:
         eligible = set(eligible_songs)
+        
+        # Filter out excluded songs (situational, meta, technical)
+        eligible = eligible - self._excluded_songs
 
         candidates = [
             freq for freq in frequencies_by_set.get(target_set, []) if freq.title in eligible
@@ -679,6 +746,18 @@ class SetlistGenerator:
         weighted_candidates: List[Tuple[SongFrequency, float]] = [
             (freq, float(freq.weight)) for freq in available
         ]
+
+        # NEW: Filter out forbidden transitions (Phase 2.2)
+        if self._use_ml_features and self._feature_store and previous_song:
+            weighted_candidates = [
+                (freq, weight)
+                for freq, weight in weighted_candidates
+                if not self._feature_store.is_forbidden_transition(previous_song, freq.title)
+            ]
+            
+            # If we filtered everything, return None
+            if not weighted_candidates:
+                return None
 
         # Apply ML placement probability adjustments
         if self._use_ml_features and self._feature_store and target_set:
@@ -721,6 +800,15 @@ class SetlistGenerator:
                     normalized_lift = min((transition.lift - 2.0) / 8.0, 1.0)
                     boost = 1.0 + self._ml_transition_bonus * normalized_lift
                     weighted_candidates[idx] = (freq, weight * boost)
+
+        # NEW: Apply STRONG boost for mandatory sequences (Phase 2.2)
+        if self._use_ml_features and self._feature_store and previous_song:
+            mandatory_next = self._feature_store.get_mandatory_next_songs(previous_song)
+            if mandatory_next:
+                for idx, (freq, weight) in enumerate(weighted_candidates):
+                    if freq.title in mandatory_next:
+                        # Much stronger boost than normal transitions (3× multiplier)
+                        weighted_candidates[idx] = (freq, weight * 3.0)
 
         total_weight = sum(weight for _, weight in weighted_candidates)
         if total_weight <= 0:

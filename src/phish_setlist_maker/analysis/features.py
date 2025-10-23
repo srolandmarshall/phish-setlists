@@ -8,6 +8,179 @@ import numpy as np
 import pandas as pd
 
 
+def compute_set_ordering_constraints(
+    tracks_df: pd.DataFrame,
+    min_cooccurrence: int = 20,
+    directionality_threshold: float = 0.90,
+) -> pd.DataFrame:
+    """
+    Detect ordering constraints for song pairs within the same set.
+    
+    Identifies pairs where A and B often appear together, and when they do,
+    A almost always comes before B (regardless of distance between them).
+    
+    Example: Mike's Song and Weekapaug Groove
+      - Appear together in 400+ sets
+      - Mike's comes first 98% of the time
+      - Distance varies (sometimes adjacent, sometimes 3+ songs apart)
+    
+    Args:
+        tracks_df: DataFrame with [song_effective_title, show_id, canonical_set, position]
+        min_cooccurrence: Minimum times pair must appear together
+        directionality_threshold: Minimum % for ordering constraint (0.90 = 90%)
+        
+    Returns:
+        DataFrame with [song_a, song_b, set_label, cooccurrence_count, 
+                       a_before_b_count, a_before_b_ratio, is_ordering_mandatory]
+    """
+    if tracks_df.empty or "position" not in tracks_df.columns:
+        return pd.DataFrame(columns=[
+            "song_a", "song_b", "set_label", "cooccurrence_count",
+            "a_before_b_count", "a_before_b_ratio", "is_ordering_mandatory"
+        ])
+    
+    # For each show/set, get all pairs of songs with their positions
+    results = []
+    
+    grouped = tracks_df.groupby(["show_id", "canonical_set"])
+    for (show_id, set_label), group in grouped:
+        songs = group[["song_effective_title", "position"]].values
+        
+        # Check all pairs in this set
+        for i in range(len(songs)):
+            for j in range(i + 1, len(songs)):
+                song_a, pos_a = songs[i]
+                song_b, pos_b = songs[j]
+                
+                # Record which comes first
+                if pos_a < pos_b:
+                    results.append({
+                        "song_a": song_a,
+                        "song_b": song_b,
+                        "set_label": set_label,
+                        "a_before_b": True,
+                    })
+                else:
+                    results.append({
+                        "song_a": song_a,
+                        "song_b": song_b,
+                        "set_label": set_label,
+                        "a_before_b": False,
+                    })
+    
+    if not results:
+        return pd.DataFrame(columns=[
+            "song_a", "song_b", "set_label", "cooccurrence_count",
+            "a_before_b_count", "a_before_b_ratio", "is_ordering_mandatory"
+        ])
+    
+    pairs_df = pd.DataFrame(results)
+    
+    # Aggregate: count cooccurrences and ordering
+    stats = pairs_df.groupby(["song_a", "song_b", "set_label"]).agg(
+        cooccurrence_count=("a_before_b", "count"),
+        a_before_b_count=("a_before_b", "sum"),
+    ).reset_index()
+    
+    # Calculate ordering ratio
+    stats["a_before_b_ratio"] = stats["a_before_b_count"] / stats["cooccurrence_count"]
+    
+    # Filter by minimum cooccurrence
+    stats = stats[stats["cooccurrence_count"] >= min_cooccurrence].copy()
+    
+    # Detect mandatory ordering (A before B happens 90%+ of the time)
+    stats["is_ordering_mandatory"] = (
+        stats["a_before_b_ratio"] >= directionality_threshold
+    )
+    
+    return stats
+
+
+def compute_directional_transitions(
+    transitions_df: pd.DataFrame,
+    min_support: int = 10,
+    mandatory_threshold: float = 0.85,
+    adjacency_threshold: float = 1.5,
+) -> pd.DataFrame:
+    """
+    Compute directional transition rules with constraints.
+    
+    Identifies:
+    - Mandatory forward sequences (A→B happens 85%+ when A appears)
+    - Forbidden reverse sequences (B→A rarely/never happens)
+    - Adjacency requirements (songs typically next to each other)
+    
+    Args:
+        transitions_df: DataFrame with [from_title, to_title, canonical_set, count]
+        min_support: Minimum occurrences to consider
+        mandatory_threshold: Confidence threshold for mandatory sequences (0-1)
+        adjacency_threshold: Max average gap for adjacency requirement
+        
+    Returns:
+        DataFrame with [from_song, to_song, set_label, forward_count, reverse_count,
+                       forward_confidence, is_mandatory, is_reverse_forbidden, avg_gap]
+    """
+    if transitions_df.empty:
+        return pd.DataFrame(columns=[
+            "from_song", "to_song", "set_label", "forward_count", "reverse_count",
+            "forward_confidence", "is_mandatory", "is_reverse_forbidden", "avg_gap"
+        ])
+    
+    # Count forward transitions (A→B)
+    forward = transitions_df.groupby(
+        ["from_title", "to_title", "canonical_set"], as_index=False
+    )["count"].sum()
+    forward.columns = ["from_song", "to_song", "set_label", "forward_count"]
+    
+    # Count reverse transitions (B→A) 
+    reverse = transitions_df.groupby(
+        ["to_title", "from_title", "canonical_set"], as_index=False
+    )["count"].sum()
+    reverse.columns = ["from_song", "to_song", "set_label", "reverse_count"]
+    
+    # Merge forward and reverse counts
+    directional = forward.merge(
+        reverse, on=["from_song", "to_song", "set_label"], how="outer"
+    ).fillna(0)
+    
+    # Calculate how often from_song appears (denominator for confidence)
+    from_totals = transitions_df.groupby(
+        ["from_title", "canonical_set"], as_index=False
+    )["count"].sum()
+    from_totals.columns = ["from_song", "set_label", "from_total"]
+    
+    directional = directional.merge(
+        from_totals, on=["from_song", "set_label"], how="left"
+    )
+    
+    # Calculate forward confidence: P(B|A) = count(A→B) / count(A)
+    directional["forward_confidence"] = (
+        directional["forward_count"] / directional["from_total"]
+    )
+    
+    # Filter by minimum support
+    directional = directional[directional["forward_count"] >= min_support].copy()
+    
+    # Detect mandatory sequences (A→B happens 85%+ of the time A appears)
+    directional["is_mandatory"] = (
+        directional["forward_confidence"] >= mandatory_threshold
+    )
+    
+    # Detect forbidden reverse (B→A is rare, <5% as common as A→B)
+    directional["is_reverse_forbidden"] = (
+        (directional["reverse_count"] < directional["forward_count"] * 0.05) &
+        (directional["forward_count"] >= min_support)
+    )
+    
+    # Placeholder for avg_gap (would need positional data to compute)
+    directional["avg_gap"] = 0.0
+    
+    return directional[
+        ["from_song", "to_song", "set_label", "forward_count", "reverse_count",
+         "forward_confidence", "is_mandatory", "is_reverse_forbidden", "avg_gap"]
+    ]
+
+
 def compute_set_entropy(freq_df: pd.DataFrame) -> pd.DataFrame:
     """
     Compute Shannon entropy for song set placement.

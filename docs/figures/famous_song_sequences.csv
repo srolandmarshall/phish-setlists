@@ -1,0 +1,37 @@
+song_a,song_b,total_cooccurrences,num_sets,sets,mandatory_in_sets,avg_ordering_ratio,always_ordered
+Mike's Song,Weekapaug Groove,511,2,"set1, set2","set1, set2",0.9940259971509972,True
+I Am Hydrogen,Weekapaug Groove,339,2,"set1, set2","set1, set2",0.9788921604711078,True
+Mike's Song,I Am Hydrogen,334,2,"set1, set2","set1, set2",0.9863679334467763,True
+The Oh Kee Pa Ceremony,Suzy Greenberg,133,2,"set1, set2","set1, set2",0.9844988344988346,True
+Mike's Song,Hold Your Head Up,106,1,set2,set2,0.9905660377358491,True
+You Enjoy Myself,Hold Your Head Up,101,1,set2,set2,1.0,True
+Tweezer,Hold Your Head Up,100,1,set2,set2,1.0,True
+Weekapaug Groove,Hold Your Head Up,98,1,set2,set2,1.0,True
+Hold Your Head Up,Hold Your Head Up,96,1,set2,set2,1.0,True
+Narration,Narration,87,2,"set1, set2","set1, set2",1.0,True
+Big Ball Jam,Hold Your Head Up,84,1,set2,set2,0.9880952380952381,True
+Tweezer,Tweezer Reprise,82,1,set2,set2,1.0,True
+I Am Hydrogen,Hold Your Head Up,74,1,set2,set2,1.0,True
+Runaway Jim,Foam,67,1,set1,set1,1.0,True
+Bouncing Around the Room,You Enjoy Myself,67,2,"set1, set2","set1, set2",1.0,True
+You Enjoy Myself,Possum,67,2,"set1, set2","set1, set2",1.0,True
+Uncle Pen,Hold Your Head Up,65,1,set2,set2,1.0,True
+Foam,Bouncing Around the Room,63,1,set1,set1,1.0,True
+Tweezer,You Enjoy Myself,63,1,set2,set2,1.0,True
+Foam,Stash,63,1,set1,set1,1.0,True
+Foam,Cavern,63,1,set1,set1,1.0,True
+Runaway Jim,Stash,59,1,set1,set1,1.0,True
+Runaway Jim,You Enjoy Myself,58,2,"set1, set2","set1, set2",1.0,True
+Bouncing Around the Room,Run Like an Antelope,56,1,set1,set1,1.0,True
+Rift,Stash,56,1,set1,set1,1.0,True
+Poor Heart,Stash,56,1,set1,set1,1.0,True
+Sparkle,Stash,55,1,set1,set1,1.0,True
+Divided Sky,Cavern,53,1,set1,set1,1.0,True
+Tweezer,Harry Hood,53,1,set2,set2,1.0,True
+Suzy Greenberg,You Enjoy Myself,53,2,"set1, set2","set1, set2",1.0,True
+Possum,You Enjoy Myself,52,2,"set1, set2","set1, set2",1.0,True
+Bouncing Around the Room,David Bowie,51,1,set1,set1,0.9803921568627451,True
+Foam,Sparkle,51,1,set1,set1,1.0,True
+Mike's Song,Simple,51,1,set2,set2,1.0,True
+Sparkle,You Enjoy Myself,51,2,"set1, set2","set1, set2",1.0,True
+Suzy Greenberg,Hold Your Head Up,51,1,set2,set2,1.0,True

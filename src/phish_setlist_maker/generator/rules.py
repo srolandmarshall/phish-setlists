@@ -145,12 +145,8 @@ class RuleContext:
 
 
 SONG_DEPENDENCY_RULES: Sequence[SongDependencyRule] = (
-    SongDependencyRule(
-        trigger="Tweezer Reprise",
-        requirements=("Tweezer",),
-        insert_candidates=("set2", "set1"),
-        allow_insert_in_trigger_segment=False,
-    ),
+    # NOTE: Tweezer → Tweezer Reprise is handled by ordering constraints (Phase 2.2)
+    # Removed old rule that forced Tweezer insertion into already-long Set 2
     SongDependencyRule(
         trigger="Mike's Song",
         requirements=("Weekapaug Groove",),
