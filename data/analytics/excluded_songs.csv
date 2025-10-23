@@ -1,0 +1,13 @@
+song_title,reason,category
+Banter,Non-musical crowd interaction,meta
+Audience Chess Move,Situational audience participation,situational
+Happy Birthday to You,Special occasion only,situational
+Birthday,Special occasion only,situational
+Soundcheck,Pre-show technical,technical
+Tuning,Technical/between songs,technical
+Intro,Not a song - metadata,meta
+Outro,Not a song - metadata,meta
+Jam,Generic jam placeholder - not a specific song,meta
+Narration,Spoken word/story - not musical,meta
+Rhombus Narration,Gamehendge narration - not a song,meta
+Thanksgiving,Holiday-specific,situational
