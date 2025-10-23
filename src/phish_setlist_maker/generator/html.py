@@ -34,7 +34,6 @@ def _render_context(generated: GeneratedSetlist, generated_at: datetime) -> str:
     meta = generated.metadata
     items = [
         f"Generated at: {generated_at.isoformat(timespec='seconds')}",
-        f"Reference date: {meta.reference_date}",
         f"Cutoff date: {meta.cutoff_date}",
         f"Era: {meta.era or 'All history'}",
         f"Year limit: {meta.year if meta.year else 'Full run'}",
@@ -215,6 +214,8 @@ def build_html_markup(
     encore_links: Optional[Sequence[PlaylistLink]] = None,
     stylesheet_href: str = "phish-setlist.css",
     script_src: Optional[str] = None,
+    venue_name: Optional[str] = None,
+    venue_city: Optional[str] = None,
 ) -> str:
     """Compose the HTML markup for a generated setlist."""
 
@@ -269,17 +270,24 @@ def build_html_markup(
             body.append(_render_script(first_track_url))
 
     stylesheet_attr = escape(stylesheet_href, quote=True)
+    
+    # Build title with venue and date
+    today = generated_at.strftime("%B %d, %Y")
+    if venue_name and venue_city:
+        page_title = f"Inphinite Setlist - {venue_name}, {venue_city} - {today}"
+    else:
+        page_title = f"Inphinite Setlist - {today}"
 
     html_parts = [
         "<!DOCTYPE html>\n",
         '<html lang="en">\n',
         "<head>\n",
         '  <meta charset="utf-8" />\n',
-        "  <title>Generated Setlist</title>\n",
+        f"  <title>{escape(page_title)}</title>\n",
         f'  <link rel="stylesheet" href="{stylesheet_attr}">\n',
         "</head>\n",
         "<body>\n",
-        "  <h1>Generated Setlist</h1>\n",
+        f"  <h1>{escape(page_title)}</h1>\n",
         "".join(body),
         "</body>\n",
         "</html>\n",
@@ -299,6 +307,8 @@ def render_html(
     encore_links: Optional[Sequence[PlaylistLink]] = None,
     stylesheet_href: str = "phish-setlist.css",
     script_src: Optional[str] = None,
+    venue_name: Optional[str] = None,
+    venue_city: Optional[str] = None,
 ) -> None:
     """Render the generated setlist to an HTML file."""
 
@@ -312,6 +322,8 @@ def render_html(
         encore_links=encore_links,
         stylesheet_href=stylesheet_href,
         script_src=script_src,
+        venue_name=venue_name,
+        venue_city=venue_city,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

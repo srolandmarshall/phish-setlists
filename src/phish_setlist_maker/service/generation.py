@@ -15,7 +15,7 @@ from ..constants import ERA_DEFINITIONS
 from ..generator import GeneratedSetlist, SetlistGenerator, random_set_lengths
 from ..generator.core import GenerationMetadata, SetSegment
 from ..generator.html import build_html_markup
-from ..models import Show, SongTrack, Track
+from ..models import Show, SongTrack, Track, Venue
 from .catalog import (
     SongCatalog,
     SongCatalogEntry,
@@ -310,6 +310,18 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
     seed = request.seed if request.seed is not None else SystemRandom().randint(0, 2**32 - 1)
     rng = Random(seed)
     length_rng = Random(seed)
+    
+    # Get a random venue for the title
+    venue_name = None
+    venue_city = None
+    try:
+        from sqlalchemy import func
+        random_venue = session.query(Venue).order_by(func.random()).limit(1).first()
+        if random_venue:
+            venue_name = random_venue.name
+            venue_city = random_venue.city
+    except Exception:
+        pass
 
     allow_previous_show = request.allow_previous_show
     current_year = datetime.now().year
@@ -434,6 +446,8 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
             playlist_sections=sections_for_html,
             stylesheet_href=stylesheet_href,
             script_src=script_src,
+            venue_name=venue_name,
+            venue_city=venue_city,
         )
         html_artifact = HTMLArtifact(markup=html_markup, stylesheet=stylesheet_href)
 
