@@ -123,6 +123,7 @@ class SetlistGenerator:
             "Soundcheck",
             "Tuning",
             "Intro",
+            "Intro (Friday the 13th Theme)",
             "Outro",
             "Jam",  # Generic jam, not Big Ball Jam
             "Narration",
