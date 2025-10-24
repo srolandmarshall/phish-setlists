@@ -81,6 +81,34 @@ p {
   font-weight: bold;
 }
 
+.issues-list li:before {
+  content: "✗";
+  color: #e74c3c;
+}
+
+.features-divider {
+  border: none;
+  border-top: 1px solid #ddd;
+  margin: 20px 0;
+}
+
+.attribution {
+  font-size: 0.85em;
+  color: #999;
+  margin-top: 30px;
+  margin-bottom: 15px;
+}
+
+.attribution a {
+  color: #667eea;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.attribution a:hover {
+  text-decoration: underline;
+}
+
 .btn {
   display: inline-block;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);

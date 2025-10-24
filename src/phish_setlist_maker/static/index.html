@@ -17,21 +17,24 @@
 
       <div class="features">
         <h3>Recent Improvements</h3>
-        <ul>
+        <ul class="improvements-list">
           <li>Weighted set closers (Character Zero, Bowie, YEM)</li>
           <li>Authentic set-ending track versions</li>
           <li>Smart frequency caps for rare songs</li>
           <li>Era-aware song selection (see below!)</li>
           <li>3,490 authentic closer performances</li>
         </ul>
-        <hr class="features-divider">
+        <hr class="features-divider" />
         <h3>Known Issues</h3>
-        <ul>
+        <ul class="issues-list">
           <li>Opener selection can be improved</li>
           <li>Setlist lengths are erratic and sometimes really long</li>
           <li>Encore openers are not well modeled yet</li>
-          <li>Hold Your Head Up selection may not match up with paired songs</li>
-          <li>Alumni Blues > Jimmy Page is excluded because of wonkiness</li> 
+          <li>
+            Hold Your Head Up selection may not match up with paired songs
+          </li>
+          <li>Alumni Blues > Jimmy Page is excluded because of wonkiness</li>
+        </ul>
       </div>
 
       <a href="/generate" id="generate-btn" class="btn">Generate Show</a>
@@ -53,39 +56,19 @@
         </div>
       </div>
 
+      <div class="attribution">
+        All inspiration and helpful amounts of data and existing work from the
+        folks at
+        <a href="https://phish.in" target="_blank" rel="noopener">Phish.in</a>.
+        Please support what they do!
+      </div>
+
       <div class="links">
         <a href="/docs">API Docs</a>
         <a href="/health">Status</a>
       </div>
     </div>
 
-    <script>
-      const useEraFilter = document.getElementById("use-era-filter");
-      const eraSelector = document.getElementById("era-selector");
-      const eraSelect = document.getElementById("era-select");
-      const generateBtn = document.getElementById("generate-btn");
-
-      // Toggle era selector visibility
-      useEraFilter.addEventListener("change", () => {
-        if (useEraFilter.checked) {
-          eraSelector.style.display = "block";
-        } else {
-          eraSelector.style.display = "none";
-          eraSelect.value = "";
-        }
-        updateGenerateUrl();
-      });
-
-      // Update URL when era changes
-      eraSelect.addEventListener("change", updateGenerateUrl);
-
-      function updateGenerateUrl() {
-        if (useEraFilter.checked && eraSelect.value) {
-          generateBtn.href = `/generate?era=${eraSelect.value}`;
-        } else {
-          generateBtn.href = "/generate";
-        }
-      }
-    </script>
+    <script src="/static/era-picker.js"></script>
   </body>
 </html>
