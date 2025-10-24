@@ -1,33 +1,83 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Inphinite - The Phish Setlist Generator</title>
-    <link rel="stylesheet" href="/static/landing.css">
-</head>
-<body>
+    <link rel="stylesheet" href="/static/landing.css" />
+  </head>
+  <body>
     <div class="container">
-        <h1>🎸 Inphinite</h1>
-        <div class="subtitle">The Phish Setlist Generator</div>
-        <p>Generate authentic Phish setlists powered by ML and 40+ years of historical data.</p>
-        
-        <div class="features">
-            <h3>Recent Improvements</h3>
-            <ul>
-                <li>Weighted set closers (Character Zero, Bowie, YEM)</li>
-                <li>Authentic set-ending track versions</li>
-                <li>Smart frequency caps for rare songs</li>
-                <li>Era-aware song selection</li>
-                <li>3,490 authentic closer performances</li>
-            </ul>
+      <h1>🎸 Inphinite</h1>
+      <div class="subtitle">The Phish Setlist Generator</div>
+      <p>
+        Generate authentic Phish setlists powered by ML and 40+ years of
+        historical data.
+      </p>
+
+      <div class="features">
+        <h3>Recent Improvements</h3>
+        <ul>
+          <li>Weighted set closers (Character Zero, Bowie, YEM)</li>
+          <li>Authentic set-ending track versions</li>
+          <li>Smart frequency caps for rare songs</li>
+          <li>Era-aware song selection</li>
+          <li>3,490 authentic closer performances</li>
+        </ul>
+      </div>
+
+      <a href="/generate" id="generate-btn" class="btn">Generate Show</a>
+
+      <div class="era-picker">
+        <label class="era-toggle">
+          <input type="checkbox" id="use-era-filter" />
+          <span>Filter by Era</span>
+        </label>
+
+        <div class="era-selector" id="era-selector" style="display: none">
+          <select id="era-select" class="era-dropdown">
+            <option value="">All Eras (1983-present)</option>
+            <option value="1.0">1.0 (1983-1999)</option>
+            <option value="2.0">2.0 (2000-2004)</option>
+            <option value="3.0">3.0 (2009-2021)</option>
+            <option value="4.0">4.0 (2021+)</option>
+          </select>
         </div>
-        
-        <a href="/generate" class="btn">Generate Show</a>
-        <div class="links">
-            <a href="/docs">API Docs</a>
-            <a href="/health">Status</a>
-        </div>
+      </div>
+
+      <div class="links">
+        <a href="/docs">API Docs</a>
+        <a href="/health">Status</a>
+      </div>
     </div>
-</body>
+
+    <script>
+      const useEraFilter = document.getElementById("use-era-filter");
+      const eraSelector = document.getElementById("era-selector");
+      const eraSelect = document.getElementById("era-select");
+      const generateBtn = document.getElementById("generate-btn");
+
+      // Toggle era selector visibility
+      useEraFilter.addEventListener("change", () => {
+        if (useEraFilter.checked) {
+          eraSelector.style.display = "block";
+        } else {
+          eraSelector.style.display = "none";
+          eraSelect.value = "";
+        }
+        updateGenerateUrl();
+      });
+
+      // Update URL when era changes
+      eraSelect.addEventListener("change", updateGenerateUrl);
+
+      function updateGenerateUrl() {
+        if (useEraFilter.checked && eraSelect.value) {
+          generateBtn.href = `/generate?era=${eraSelect.value}`;
+        } else {
+          generateBtn.href = "/generate";
+        }
+      }
+    </script>
+  </body>
 </html>
