@@ -216,3 +216,9 @@ p {
 .links a:hover {
   text-decoration: underline;
 }
+
+hr.features-divider {
+  border: none;
+  border-top: 1px solid #eee;
+  margin: 20px 0;
+}
