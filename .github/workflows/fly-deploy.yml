@@ -5,6 +5,16 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'notebooks/**'
+      - 'ERA-PICKER.md'
+      - 'FREQUENCY-CAP-SUMMARY.md'
+      - 'SET-ENDING-TRACKS-SUMMARY.md'
+      - 'IMPLEMENTATION-SUMMARY.md'
+      - 'SESSION-SUMMARY.md'
+      - 'FLY-DEPLOYMENT.md'
 jobs:
   deploy:
     name: Deploy app
