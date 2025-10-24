@@ -69,6 +69,8 @@ def query_set_ending_tracks_for_song(
     """
     Query tracks for a song that were performed as set closers using prebuilt lookup.
     
+    Set 2 and Encore share tracks bidirectionally (both are show closers).
+    
     Args:
         db_session: Database session
         song_slug: Slug of the song to query
@@ -90,11 +92,23 @@ def query_set_ending_tracks_for_song(
     
     df = pd.read_parquet(lookup_path)
     
-    # Filter by song_slug and canonical_set
-    filtered = df[
-        (df["song_slug"] == song_slug) &
-        (df["canonical_set"] == canonical_set)
-    ].sort_values("likes_count", ascending=False).head(limit)
+    # For encores and Set 2, share tracks (they're both closers)
+    if canonical_set == "encore":
+        filtered = df[
+            (df["song_slug"] == song_slug) &
+            ((df["canonical_set"] == "encore") | (df["canonical_set"] == "set2"))
+        ].sort_values("likes_count", ascending=False).head(limit)
+    elif canonical_set == "set2":
+        filtered = df[
+            (df["song_slug"] == song_slug) &
+            ((df["canonical_set"] == "set2") | (df["canonical_set"] == "encore"))
+        ].sort_values("likes_count", ascending=False).head(limit)
+    else:
+        # For Set 1 and Set 3, only use tracks from that specific set
+        filtered = df[
+            (df["song_slug"] == song_slug) &
+            (df["canonical_set"] == canonical_set)
+        ].sort_values("likes_count", ascending=False).head(limit)
     
     if len(filtered) == 0:
         return []
