@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inphinite - The Phish Setlist Generator</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            padding: 60px 40px;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 600px;
+            text-align: center;
+        }
+        h1 {
+            font-size: 2.5em;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            font-size: 1em;
+            color: #999;
+            margin-bottom: 30px;
+            font-style: italic;
+        }
+        p {
+            font-size: 1.1em;
+            color: #666;
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+        .features {
+            text-align: left;
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+        }
+        .features h3 {
+            font-size: 1em;
+            color: #667eea;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .features ul {
+            list-style: none;
+            font-size: 0.95em;
+            color: #555;
+        }
+        .features li {
+            padding: 6px 0;
+            padding-left: 20px;
+            position: relative;
+        }
+        .features li:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #667eea;
+            font-weight: bold;
+        }
+        .btn {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 16px 48px;
+            text-decoration: none;
+            border-radius: 8px;
+            font-size: 1.2em;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+        .links {
+            margin-top: 30px;
+            padding-top: 30px;
+            border-top: 1px solid #eee;
+        }
+        .links a {
+            color: #667eea;
+            text-decoration: none;
+            margin: 0 12px;
+            font-size: 0.95em;
+        }
+        .links a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎸 Inphinite</h1>
+        <div class="subtitle">The Phish Setlist Generator</div>
+        <p>Generate authentic Phish setlists powered by ML and 40+ years of historical data.</p>
+        
+        <div class="features">
+            <h3>Recent Improvements</h3>
+            <ul>
+                <li>Weighted set closers (Character Zero, Bowie, YEM)</li>
+                <li>Authentic set-ending track versions</li>
+                <li>Smart frequency caps for rare songs</li>
+                <li>Era-aware song selection</li>
+                <li>3,490 authentic closer performances</li>
+            </ul>
+        </div>
+        
+        <a href="/generate" class="btn">Generate Show</a>
+        <div class="links">
+            <a href="/docs">API Docs</a>
+            <a href="/health">Status</a>
+        </div>
+    </div>
+</body>
+</html>

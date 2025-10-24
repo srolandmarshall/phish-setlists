@@ -10,9 +10,28 @@ This repository contains utilities, a smart generator, and notebooks used while 
 
 - **Generate synthetic setlists** with companion playlists (M3U) and HTML summaries
 - **ML-enhanced generation** using historical placement probabilities and transition patterns (Phase 2)
+- **Authentic set closers** with weighted selection and actual set-ending track versions
+- **Intelligent frequency capping** to prevent rare songs from appearing too often
 - **FastAPI REST API** for programmatic access
 - **Local-first**: uses a Postgres database dump / local DB for historical data
 - **Analytics & Features**: Exploratory notebooks and pre-computed feature tables (Phase 1)
+
+### Recent Improvements (January 2025)
+
+**Set-Ending Song Selection**
+- Set 1 and Set 2 closers are now weighted by historical ending probability
+- Songs like Character Zero (48.6% Set 1 ender) and David Bowie (36.9%) appear as closers more appropriately
+- Uses actual set-ending track performances for authentic closer energy and duration
+
+**Frequency Caps for Rare Songs**
+- Songs with <50 historical appearances are downweighted to prevent overuse
+- Era-aware exclusions (e.g., "I Am the Walrus" only in 4.0 era)
+- Rare song appearances reduced by 75-80% to realistic levels
+
+**Set 2 / Encore Track Sharing**
+- Set 2 and Encore closers share a pool of 3,490 authentic ending performances
+- Both contexts access the full range of show-closing vibes
+- Expands options while maintaining authentic closer energy
 
 ## Quick start
 
