@@ -97,6 +97,9 @@ class SetlistGenerator:
         
         # Load excluded songs (always loaded, not just for ML)
         self._excluded_songs: Set[str] = self._load_excluded_songs()
+        
+        # Era context for generation (set during generate() call)
+        self._current_era: Optional[str] = None
 
     def _load_excluded_songs(self) -> Set[str]:
         """Load list of songs to exclude from generation (situational, meta, technical)."""
@@ -161,6 +164,9 @@ class SetlistGenerator:
 
         if era and era not in ERA_DEFINITIONS:
             raise ValueError(f"Unsupported era '{era}'. Known eras: {', '.join(ERA_DEFINITIONS)}")
+
+        # Store era context for era-aware song filtering
+        self._current_era = era
 
         reference = reference_date or self._latest_show_date()
         cutoff = reference
@@ -436,6 +442,28 @@ class SetlistGenerator:
 
         used_songs.update(songs)
 
+        # NEW: Try to replace last song with a set-ending song (for Set 1 and Set 2)
+        if (
+            self._use_ml_features
+            and self._feature_store
+            and canonical_set in ["set1", "set2"]
+            and len(songs) > 0
+        ):
+            set_ender = self._select_set_ender(
+                canonical_set=canonical_set,
+                eligible_songs=eligible_songs,
+                used_songs=used_songs,
+            )
+            if set_ender and set_ender not in songs:
+                # Replace last song with set ender
+                last_song = songs[-1]
+                songs[-1] = set_ender
+                used_songs.discard(last_song)
+                used_songs.add(set_ender)
+                notes.append(
+                    f"Selected {set_ender} as {segment_label} closer (weighted by historical ending probability)"
+                )
+
         estimated_duration = self._estimate_segment_duration(
             songs,
             song_stats,
@@ -571,7 +599,7 @@ class SetlistGenerator:
 
             if (
                 max_duration is not None
-                and (base_song_count + len(selection)) >= 1
+                and (base_song_count + len(selection)) >= 2
                 and estimated_total > max_duration
             ):
                 duration_capped = True
@@ -707,6 +735,10 @@ class SetlistGenerator:
         
         # Filter out excluded songs (situational, meta, technical)
         eligible = eligible - self._excluded_songs
+        
+        # Era-aware exclusions: "I Am the Walrus" only allowed in 4.0 era
+        if self._current_era != "4.0" and "I Am the Walrus" in eligible:
+            eligible.discard("I Am the Walrus")
 
         candidates = [
             freq for freq in frequencies_by_set.get(target_set, []) if freq.title in eligible
@@ -759,6 +791,20 @@ class SetlistGenerator:
             # If we filtered everything, return None
             if not weighted_candidates:
                 return None
+
+        # NEW: Apply frequency caps to rare songs to prevent overuse
+        if self._use_ml_features and self._feature_store:
+            for idx, (freq, weight) in enumerate(weighted_candidates):
+                features = self._feature_store.get_song_features(freq.title)
+                if features and features.total_appearances < 50:
+                    # Scale down rare songs (historical count < 50)
+                    if features.total_appearances < 30:
+                        # Very rare: 25% weight
+                        capped_weight = weight * 0.25
+                    else:
+                        # Rare: 50% weight
+                        capped_weight = weight * 0.5
+                    weighted_candidates[idx] = (freq, capped_weight)
 
         # Apply ML placement probability adjustments
         if self._use_ml_features and self._feature_store and target_set:
@@ -822,3 +868,60 @@ class SetlistGenerator:
             if rand <= cumulative:
                 return freq.title
         return weighted_candidates[-1][0].title
+
+    def _select_set_ender(
+        self,
+        *,
+        canonical_set: str,
+        eligible_songs: Iterable[str],
+        used_songs: Set[str],
+    ) -> Optional[str]:
+        """
+        Select a set-ending song weighted by historical ending probability.
+        
+        For Set 1 and Set 2, this picks songs that historically end sets,
+        weighted by how often they appear as set closers.
+        """
+        if not self._feature_store:
+            return None
+        
+        # Get all potential set enders for this set
+        all_enders = self._feature_store.get_set_enders_for_set(canonical_set, min_probability=0.0)
+        
+        if not all_enders:
+            return None
+        
+        eligible_set = set(eligible_songs)
+        
+        # Filter to eligible and unused songs
+        candidates = [
+            ender for ender in all_enders
+            if ender.song_name in eligible_set
+            and ender.song_name not in used_songs
+            and ender.song_name not in self._excluded_songs
+        ]
+        
+        if not candidates:
+            return None
+        
+        # Weight by ending_probability * ending_count (favor both high probability AND frequency)
+        weighted_candidates: List[Tuple[str, float]] = []
+        for ender in candidates:
+            # Use ending_probability as primary weight, scaled by count for tie-breaking
+            weight = ender.ending_probability * (1.0 + (ender.ending_count / 100.0))
+            weighted_candidates.append((ender.song_name, weight))
+        
+        total_weight = sum(w for _, w in weighted_candidates)
+        if total_weight <= 0:
+            return None
+        
+        # Weighted random selection
+        rand = self.rng.random() * total_weight
+        cumulative = 0.0
+        for song, weight in weighted_candidates:
+            cumulative += weight
+            if rand <= cumulative:
+                return song
+        
+        return weighted_candidates[-1][0]
+

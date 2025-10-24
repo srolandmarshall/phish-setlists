@@ -73,6 +73,17 @@ class CrossSetDependency:
     description: str
 
 
+@dataclass
+class SetEndingFrequency:
+    """Frequency data for songs as set closers."""
+    
+    song_name: str
+    set_label: str
+    ending_count: int
+    total_count: int
+    ending_probability: float
+
+
 class FeatureStore:
     """In-memory cache of ML features for fast lookup."""
 
@@ -86,6 +97,7 @@ class FeatureStore:
         self._forbidden_transitions: Optional[Set[Tuple[str, str]]] = None
         self._ordering_constraints: Optional[Dict[str, Set[str]]] = None  # song_a -> songs that must come after
         self._cross_set_dependencies: Optional[list[CrossSetDependency]] = None
+        self._set_ending_frequencies: Optional[Dict[Tuple[str, str], SetEndingFrequency]] = None  # (song, set) -> freq data
 
     def load(self) -> None:
         """Load all feature tables into memory."""
@@ -95,6 +107,7 @@ class FeatureStore:
         self._load_directional_rules()
         self._load_ordering_constraints()
         self._load_cross_set_dependencies()
+        self._load_set_ending_frequencies()
 
     def _load_song_features(self) -> None:
         """Load song-level features from parquet."""
@@ -240,6 +253,29 @@ class FeatureStore:
             )
             self._cross_set_dependencies.append(dep)
 
+    def _load_set_ending_frequencies(self) -> None:
+        """Load set-ending frequency data."""
+        endings_path = self.features_dir / "set_ending_frequencies.parquet"
+        
+        # Gracefully handle missing file
+        if not endings_path.exists():
+            self._set_ending_frequencies = {}
+            return
+        
+        df = pd.read_parquet(endings_path)
+        
+        # Build index: (song, set_label) -> SetEndingFrequency
+        self._set_ending_frequencies = {}
+        for _, row in df.iterrows():
+            key = (row["song_effective_title"], row["canonical_set"])
+            self._set_ending_frequencies[key] = SetEndingFrequency(
+                song_name=row["song_effective_title"],
+                set_label=row["canonical_set"],
+                ending_count=int(row["ending_count"]),
+                total_count=int(row["total_count"]),
+                ending_probability=float(row["ending_probability"]),
+            )
+
     def get_song_features(self, song_name: str) -> Optional[SongFeatures]:
         """Retrieve features for a specific song."""
         if self._song_features is None:
@@ -377,3 +413,24 @@ class FeatureStore:
                 return True
         
         return False
+
+    def get_set_ending_probability(self, song_name: str, set_label: str) -> float:
+        """Get probability that a song ends a specific set when it appears in that set."""
+        if self._set_ending_frequencies is None:
+            return 0.0
+        
+        freq = self._set_ending_frequencies.get((song_name, set_label))
+        if freq is None:
+            return 0.0
+        return freq.ending_probability
+
+    def get_set_enders_for_set(self, set_label: str, min_probability: float = 0.0) -> list[SetEndingFrequency]:
+        """Get all songs that can end a specific set, optionally filtered by minimum probability."""
+        if self._set_ending_frequencies is None:
+            return []
+        
+        return [
+            freq
+            for (song, s_label), freq in self._set_ending_frequencies.items()
+            if s_label == set_label and freq.ending_probability >= min_probability
+        ]

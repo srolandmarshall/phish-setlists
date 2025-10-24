@@ -60,6 +60,62 @@ def query_tracks_for_song(db_session: Session, song_slug: str, limit: int = 25) 
     ]
 
 
+def query_set_ending_tracks_for_song(
+    db_session: Session,
+    song_slug: str,
+    canonical_set: str,
+    limit: int = 25
+) -> List[CandidateTrack]:
+    """
+    Query tracks for a song that were performed as set closers using prebuilt lookup.
+    
+    Args:
+        db_session: Database session
+        song_slug: Slug of the song to query
+        canonical_set: Canonical set label (set1, set2, set3, encore)
+        limit: Maximum number of tracks to return
+    
+    Returns:
+        List of CandidateTrack objects for performances that ended the specified set
+    """
+    import pandas as pd
+    from pathlib import Path
+    
+    # Load set-ending tracks lookup
+    lookup_path = Path(__file__).resolve().parent.parent.parent.parent / "data" / "analytics" / "features" / "set_ending_tracks.parquet"
+    
+    if not lookup_path.exists():
+        # Fall back to regular tracks if lookup doesn't exist
+        return []
+    
+    df = pd.read_parquet(lookup_path)
+    
+    # Filter by song_slug and canonical_set
+    filtered = df[
+        (df["song_slug"] == song_slug) &
+        (df["canonical_set"] == canonical_set)
+    ].sort_values("likes_count", ascending=False).head(limit)
+    
+    if len(filtered) == 0:
+        return []
+    
+    # Convert to CandidateTrack objects
+    candidates = []
+    for _, row in filtered.iterrows():
+        candidates.append(
+            CandidateTrack(
+                track_id=int(row["track_id"]),
+                slug=row["track_slug"],
+                duration=int(row["duration"]) if pd.notna(row["duration"]) else None,
+                show_date=row["show_date"].date() if pd.notna(row["show_date"]) else None,
+                likes_count=int(row["likes_count"]),
+                metadata_cache=None,  # Not stored in lookup
+            )
+        )
+    
+    return candidates
+
+
 def fetch_remote_track_metadata(
     *,
     track_id: Optional[int],

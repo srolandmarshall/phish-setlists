@@ -142,8 +142,19 @@ def _select_track_display(
     rng: Random,
     strict: bool,
     missing: Dict[str, int],
+    is_set_ender: bool = False,
+    canonical_set: Optional[str] = None,
 ) -> Optional[SongDisplay]:
-    candidates = query_tracks_for_song(db_session, entry.slug)
+    # Try to use set-ending tracks if this song is a set closer
+    if is_set_ender and canonical_set:
+        from .tracks import query_set_ending_tracks_for_song
+        candidates = query_set_ending_tracks_for_song(db_session, entry.slug, canonical_set)
+        if not candidates:
+            # Fall back to regular tracks if no set-ending tracks found
+            candidates = query_tracks_for_song(db_session, entry.slug)
+    else:
+        candidates = query_tracks_for_song(db_session, entry.slug)
+    
     if not candidates:
         missing[song_title] = missing.get(song_title, 0) + 1
         if strict:
@@ -212,7 +223,7 @@ def prepare_playlist_artifacts(
     playlist_lines: List[str] = ["#EXTM3U"] if include_m3u else []
     first_track_url: Optional[str] = None
 
-    def append_track(song_title: str) -> None:
+    def append_track(song_title: str, is_set_ender: bool = False, canonical_set: Optional[str] = None) -> None:
         nonlocal first_track_url
 
         normalized = normalize_title(song_title)
@@ -234,6 +245,8 @@ def prepare_playlist_artifacts(
                     rng=rng,
                     strict=strict,
                     missing=missing,
+                    is_set_ender=is_set_ender,
+                    canonical_set=canonical_set,
                 )
                 track_cache[normalized] = display
 
@@ -254,14 +267,18 @@ def prepare_playlist_artifacts(
             first_track_url = display.mp3_url
 
     for segment in segments:
-        for raw_song in segment.songs:
+        from ..generator.historical import normalize_set_label
+        canonical = normalize_set_label(segment.label) if segment.label else None
+        for idx, raw_song in enumerate(segment.songs):
+            is_last = (idx == len(segment.songs) - 1)
             for title in split_song_titles(raw_song):
-                append_track(title)
+                append_track(title, is_set_ender=is_last, canonical_set=canonical)
 
     if encore:
-        for raw_song in encore.songs:
+        for idx, raw_song in enumerate(encore.songs):
+            is_last = (idx == len(encore.songs) - 1)
             for title in split_song_titles(raw_song):
-                append_track(title)
+                append_track(title, is_set_ender=is_last, canonical_set="encore")
 
     sections: List[Tuple[str, List[SongDisplay]]] = []
     for segment in segments:

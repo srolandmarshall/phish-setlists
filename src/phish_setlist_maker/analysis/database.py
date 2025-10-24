@@ -286,6 +286,65 @@ def build_venue_tendencies(tracks_df: pd.DataFrame, shows_df: pd.DataFrame) -> p
     return venue_stats.merge(top_songs, on="venue_id", how="left").drop(columns=["total_duration"])
 
 
+def build_set_ending_frequencies(
+    frame: pd.DataFrame,
+    *,
+    allowed_sets: Optional[Iterable[str]] = None,
+) -> pd.DataFrame:
+    """Compute set-ending song probabilities from track data.
+    
+    Identifies the last song in each set and calculates how often
+    each song appears as a set closer for each canonical set.
+    
+    Args:
+        frame: Track dataframe with show_id, canonical_set, position, song_effective_title
+        allowed_sets: Optional filter for specific sets (e.g., ['set1', 'set2'])
+    
+    Returns:
+        DataFrame with columns: song_effective_title, canonical_set, ending_count, total_count, ending_probability
+    """
+    if frame.empty:
+        return pd.DataFrame(
+            columns=["song_effective_title", "canonical_set", "ending_count", "total_count", "ending_probability"]
+        )
+    
+    # Filter to allowed sets if specified
+    filtered = frame.dropna(subset=["canonical_set", "song_effective_title"])
+    if allowed_sets is not None:
+        filtered = filtered[filtered["canonical_set"].isin(allowed_sets)]
+    
+    # Identify set-ending songs (last position in each set)
+    set_endings = (
+        filtered.sort_values("position")
+        .groupby(["show_id", "canonical_set"])
+        .tail(1)[["show_id", "canonical_set", "song_effective_title"]]
+    )
+    
+    # Count how often each song ends each set type
+    ending_counts = (
+        set_endings.groupby(["song_effective_title", "canonical_set"])
+        .size()
+        .reset_index(name="ending_count")
+    )
+    
+    # Count total appearances of each song in each set (for probability calculation)
+    total_counts = (
+        filtered.groupby(["song_effective_title", "canonical_set"])
+        .size()
+        .reset_index(name="total_count")
+    )
+    
+    # Merge and calculate probability
+    result = ending_counts.merge(
+        total_counts,
+        on=["song_effective_title", "canonical_set"],
+        how="left"
+    )
+    result["ending_probability"] = result["ending_count"] / result["total_count"]
+    
+    return result.sort_values(["canonical_set", "ending_count"], ascending=[True, False])
+
+
 def _canonical_for_analysis(label: Optional[str]) -> Optional[str]:
     if not label:
         return None

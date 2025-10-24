@@ -12,6 +12,7 @@ from phish_setlist_maker.analysis.features import (
     compute_transition_lift,
     identify_multi_home_songs,
 )
+from phish_setlist_maker.analysis.database import build_set_ending_frequencies
 
 
 def main():
@@ -35,9 +36,11 @@ def main():
     print("Loading source data...")
     freq_df = pd.read_parquet(args.data_dir / "song_set_frequencies.parquet")
     transitions_df = pd.read_parquet(args.data_dir / "song_transitions.parquet")
+    tracks_df = pd.read_parquet(args.data_dir / "tracks.parquet")
 
     print(f"  → {len(freq_df)} frequency records")
     print(f"  → {len(transitions_df)} transitions")
+    print(f"  → {len(tracks_df)} tracks")
 
     print("\nComputing set entropy...")
     entropy = compute_set_entropy(freq_df)
@@ -77,8 +80,29 @@ def main():
     print(f"  → {features_path} ({len(song_features)} songs)")
     print(f"  Columns: {', '.join(song_features.columns.tolist())}")
 
+    print("\nBuilding set-ending frequencies...")
+    set_endings = build_set_ending_frequencies(
+        tracks_df,
+        allowed_sets=["set1", "set2", "set3", "encore"]
+    )
+    endings_path = args.out_dir / "set_ending_frequencies.parquet"
+    set_endings.to_parquet(endings_path, index=False)
+    print(f"  → {endings_path} ({len(set_endings)} song-set combinations)")
+    
+    # Show top set enders by probability
+    for set_name in ["set1", "set2"]:
+        set_data = set_endings[set_endings["canonical_set"] == set_name]
+        if not set_data.empty:
+            top_enders = set_data.nlargest(5, "ending_probability")
+            print(f"  Top {set_name} enders:")
+            for _, row in top_enders.iterrows():
+                print(f"    {row['song_effective_title']}: {row['ending_probability']:.1%} ({row['ending_count']}/{row['total_count']})")
+
     print("\n✅ Feature engineering complete!")
     print(f"   All outputs in {args.out_dir}/")
+    
+    print("\nNote: To build set-ending TRACK lookup, run:")
+    print("  poetry run python scripts/build_set_ending_tracks.py")
 
 
 if __name__ == "__main__":
