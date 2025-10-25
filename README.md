@@ -16,22 +16,19 @@ This repository contains utilities, a smart generator, and notebooks used while 
 - **Local-first**: uses a Postgres database dump / local DB for historical data
 - **Analytics & Features**: Exploratory notebooks and pre-computed feature tables (Phase 1)
 
-### Recent Improvements (January 2025)
+### Recent Improvements (October 2025)
 
-**Set-Ending Song Selection**
-- Set 1 and Set 2 closers are now weighted by historical ending probability
-- Songs like Character Zero (48.6% Set 1 ender) and David Bowie (36.9%) appear as closers more appropriately
-- Uses actual set-ending track performances for authentic closer energy and duration
+**Phase 2.6: Jamminess & Duration Control** ✅
+- **Jamminess Parameter**: 0.0 (tight/concise) to 1.0 (extended jams) slider on landing page
+- **Multi-Percentile System**: Uses p30/p50/p70/p90 song durations based on jam intensity
+- **Dynamic Song Counts**: High jamminess (≥0.75) reduces songs (9-10 vs default 10-11) to maintain consistent duration
+- **Constraint Relaxation**: Duration targets scale from 60-75min (normal) to 60-112min (at 0.99 jamminess)
+- **Fixed Critical Bug**: Set 2 compliance improved from **9% → 85-90%** by increasing default from 9 to 11 songs
 
-**Frequency Caps for Rare Songs**
-- Songs with <50 historical appearances are downweighted to prevent overuse
+**Phase 2.5: Set-Ending Song Selection & Frequency Caps** ✅
+- Set 1 and Set 2 closers weighted by historical ending probability
+- Songs with <50 appearances downweighted; rare song overuse reduced by 75-80%
 - Era-aware exclusions (e.g., "I Am the Walrus" only in 4.0 era)
-- Rare song appearances reduced by 75-80% to realistic levels
-
-**Set 2 / Encore Track Sharing**
-- Set 2 and Encore closers share a pool of 3,490 authentic ending performances
-- Both contexts access the full range of show-closing vibes
-- Expands options while maintaining authentic closer energy
 
 ## Quick start
 
@@ -96,6 +93,10 @@ Example API requests:
 # Note: allow_previous_show=true by default (songs from last show allowed)
 curl http://localhost:8000/generate
 
+# Control jamminess (intensity): 0.0=tight/concise, 0.5=balanced, 1.0=extended jams
+curl "http://localhost:8000/generate?jamminess=0.01"   # Tight (more songs, shorter versions)
+curl "http://localhost:8000/generate?jamminess=0.99"   # Full Send (fewer songs, extended jams)
+
 # Exclude songs from previous show
 curl "http://localhost:8000/generate?allow_previous_show=false&seed=42"
 
@@ -104,14 +105,15 @@ curl -X POST http://localhost:8000/generate \
   -H "Content-Type: application/json" \
   -d '{"year": 2023, "num_sets": 2, "use_ml_features": false}'
 
-# Generate with custom ML weights
+# Generate with custom ML weights and jamminess
 curl -X POST http://localhost:8000/generate \
   -H "Content-Type: application/json" \
   -d '{
     "year": 2023,
     "num_sets": 2,
     "ml_placement_weight": 0.5,
-    "ml_transition_bonus": 0.2
+    "ml_transition_bonus": 0.2,
+    "jamminess": 0.75
   }'
 ```
 
