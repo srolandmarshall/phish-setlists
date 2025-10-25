@@ -14,9 +14,9 @@ from phish_setlist_maker.db import session_scope
 from phish_setlist_maker.generator import SetlistGenerator
 
 
-def test_tweezer_reprise_rule(num_trials: int = 100):
-    """Generate setlists and verify Tweezer Reprise rule."""
-    
+def run_tweezer_reprise_rule(num_trials: int = 100):
+    """Generate setlists and verify Tweezer Reprise rule. Returns aggregated stats."""
+
     # Load feature store
     features_dir = Path("data/analytics/features")
     feature_store = FeatureStore(features_dir)
@@ -109,7 +109,13 @@ def test_tweezer_reprise_rule(num_trials: int = 100):
     
     print("=" * 70)
     
-    return stats['reprise_without_tweezer'] == 0  # True if no violations
+    return stats
+
+
+def test_tweezer_reprise_rule():
+    """Pytest entrypoint that asserts no violations occurred."""
+    stats = run_tweezer_reprise_rule()
+    assert stats["reprise_without_tweezer"] == 0, "Tweezer Reprise appeared without Tweezer in earlier sets"
 
 
 if __name__ == "__main__":
@@ -119,5 +125,6 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         num_trials = int(sys.argv[1])
     
-    success = test_tweezer_reprise_rule(num_trials)
+    stats = run_tweezer_reprise_rule(num_trials)
+    success = stats["reprise_without_tweezer"] == 0
     sys.exit(0 if success else 1)
