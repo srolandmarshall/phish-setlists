@@ -107,3 +107,17 @@ def test_post_generate_negotiates_html(api_client: TestClient, mocker: MockerFix
     mock_request: GenerationRequest = mock_generate.call_args.args[1]
     assert mock_request.include_playlist is True
     assert mock_request.include_html is True
+
+
+def test_get_generate_forwards_jamminess(api_client: TestClient, mocker: MockerFixture) -> None:
+    mock_generate = mocker.patch(
+        "phish_setlist_maker.api.generate_show",
+        return_value=_fake_generation_result(include_html=True),
+    )
+
+    response = api_client.get("/generate?jamminess=0.42")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    mock_request: GenerationRequest = mock_generate.call_args.args[1]
+    assert mock_request.jamminess == pytest.approx(0.42)

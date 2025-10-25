@@ -63,6 +63,12 @@ def generate_html(
     use_ml_features: bool = Query(True, description="Enable ML-driven feature adjustments"),
     ml_placement_weight: float = Query(0.3, ge=0.0, le=1.0, description="Weight for ML placement probabilities"),
     ml_transition_bonus: float = Query(0.1, ge=0.0, le=1.0, description="Bonus for ML transition lifts"),
+    jamminess: Optional[float] = Query(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Jam intensity override (0=tight/concise, 0.5=balanced, 1.0=max jam).",
+    ),
     session: Session = Depends(get_session),
 ) -> HTMLResponse:
     payload = GenerateRequestModel(
@@ -78,6 +84,7 @@ def generate_html(
         use_ml_features=use_ml_features,
         ml_placement_weight=ml_placement_weight,
         ml_transition_bonus=ml_transition_bonus,
+        jamminess=jamminess,
     )
 
     generation_request = build_generation_request(

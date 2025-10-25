@@ -24,7 +24,7 @@
 - **Full Send (0.99)**: 100% Set 1, 98% Set 2 compliance ✓
 
 #### Files
-- **New**: `docs/ml/06-JAMMINESS-AND-DURATION-CONTROL.md` - Complete phase documentation
+- **New**: `docs/ml/07-JAMMINESS-AND-DURATION-CONTROL.md` - Complete phase documentation
 - **New**: `scripts/analyze_jamminess_with_charts.py` - Analysis with matplotlib
 - **Modified**: `core.py`, `constants.py`, `schemas.py`, etc. - Implementation
 
