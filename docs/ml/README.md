@@ -1,6 +1,39 @@
 # ML & Data Analysis Documentation
 
-**Last Updated**: 2025-10-23
+**Last Updated**: 2025-10-24
+
+---
+
+## Recent Updates (October 24, 2025)
+
+### Phase 2.6: Jamminess & Duration Control ✅
+
+**Completed comprehensive jamminess system** giving users fine-grained control over setlist intensity:
+
+#### Major Achievements
+1. **Multi-Percentile Duration System** - Replaced single p80 with p30/p50/p70/p90 selection
+2. **Fixed Critical Set 2 Bug** - Duration compliance improved from **9% → 85-90%**
+3. **Dynamic Percentile Selection** - Intelligently chooses song durations based on remaining time or user preference
+4. **Jamminess Parameter** - 0.0 (tight) to 1.0 (extended) with constraint relaxation
+5. **Dynamic Song Count Adjustment** - High jamminess reduces song count (8-9 vs 10-11) to maintain consistent duration
+6. **Matplotlib Analysis Script** - 9-subplot comparison of jamminess levels
+
+#### Key Results
+- **Tight (0.01)**: 100% Set 1, 84% Set 2 compliance ✓
+- **Balanced (0.5)**: 92% Set 1, 90% Set 2 compliance ✓
+- **Full Send (0.99)**: 100% Set 1, 98% Set 2 compliance ✓
+
+#### Files
+- **New**: `docs/ml/06-JAMMINESS-AND-DURATION-CONTROL.md` - Complete phase documentation
+- **New**: `scripts/analyze_jamminess_with_charts.py` - Analysis with matplotlib
+- **Modified**: `core.py`, `constants.py`, `schemas.py`, etc. - Implementation
+
+#### What's New in This Phase
+- **Jamminess Control**: Web UI slider, API parameter, CLI flag
+- **Multi-Percentile Durations**: Different song lengths based on intensity level
+- **Constraint Relaxation**: Duration targets scale from 60-75min (normal) to 60-112min (0.99)
+- **Smart Song Counts**: 9-10 songs at high jamminess, 10-11 at default/tight
+- **Analysis Tools**: Matplotlib charts for validation and visualization
 
 ---
 
@@ -237,11 +270,11 @@ poetry run python scripts/report_venue_analysis.py
 - **Phase 1**: Feature engineering (389 songs, 181 transitions)
 - **Phase 2.1**: Generator integration (ML-enhanced generation)
 - **Phase 2.2**: Constraints system (686 ordering rules, cross-set deps)
-- **Phase 2.5**: **NEW** Set-ending track selection & frequency caps
+- **Phase 2.5**: Set-ending track selection & frequency caps
+- **Phase 2.6**: **NEW** Jamminess & duration control (multi-percentile durations, dynamic song counts, constraint relaxation)
 
 ### What's Next 🔄
 
-- **Phase 2.6**: Set length modeling & control
 - **Phase 2.7**: Opener selection improvements
 - **Phase 2.8**: Encore opener modeling
 - **Phase 3**: Song similarity & substitution
@@ -252,7 +285,7 @@ poetry run python scripts/report_venue_analysis.py
 ```
 Phase 0: ████████████████████ 100% Complete
 Phase 1: ████████████████████ 100% Complete
-Phase 2: ████████████████░░░░  85% In Progress (NEW: closers + frequency)
+Phase 2: ██████████████████░░  90% In Progress (NEW: jamminess + duration)
 Phase 3: ░░░░░░░░░░░░░░░░░░░░   0% Planned
 Phase 4: ░░░░░░░░░░░░░░░░░░░░   0% Optional
 ```
