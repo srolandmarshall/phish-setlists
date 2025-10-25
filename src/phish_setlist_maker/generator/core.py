@@ -182,6 +182,16 @@ class SetlistGenerator:
             cutoff = date(year, 12, 31)
 
         lengths = {**DEFAULT_SET_LENGTHS, **(set_lengths or {})}
+
+        # Adjust song counts based on jamminess level
+        # High jamminess (extended jams) → fewer songs needed to fill duration
+        # Low jamminess uses default counts (duration capping handles it naturally)
+        if self._jamminess is not None and self._jamminess >= 0.75:
+            # High jamminess: fewer songs, longer jams
+            lengths["set1"] = max(8, lengths.get("set1", 10) - 1)
+            lengths["set2"] = max(9, lengths.get("set2", 11) - 1)
+            lengths["set3"] = max(5, lengths.get("set3", 6) - 1)
+
         duration_targets = self._resolve_duration_targets(
             num_sets=num_sets,
             include_encore=include_encore,
@@ -651,9 +661,9 @@ class SetlistGenerator:
                 # At high jamminess (0.75-0.9), be more permissive - add 25% to upper bound
                 adjusted_upper = upper * 1.25
             else:
-                # Default behavior - enforce duration targets with normal margin
-                margin = min(int(window * self._duration_margin_ratio), self._duration_margin_cap)
-                adjusted_upper = max(lower, upper - margin)
+                # Default behavior - use upper bound as target (safety_factor provides conservatism)
+                # The safety_factor (1.05) already builds in headroom for estimation error
+                adjusted_upper = upper
 
             max_duration = float(adjusted_upper)
 
