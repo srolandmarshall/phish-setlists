@@ -10,5 +10,6 @@ Outro,Not a song - metadata,meta
 Jam,Generic jam placeholder - not a specific song,meta
 Narration,Spoken word/story - not musical,meta
 Rhombus Narration,Gamehendge narration - not a song,meta
+Interview,Non-musical spoken content - equivalent to banter,meta
 Thanksgiving,Holiday-specific,situational
 Alumni Blues > Letter to Jimmy Page > Alumni Blues,Complex medley - should be handled as separate songs,complex_medley
