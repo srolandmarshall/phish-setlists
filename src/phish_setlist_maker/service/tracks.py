@@ -28,7 +28,11 @@ class CandidateTrack:
     metadata_cache: Optional[dict] = None
 
 
-def query_tracks_for_song(db_session: Session, song_slug: str, limit: int = 50) -> List[CandidateTrack]:
+def query_tracks_for_song(
+    db_session: Session,
+    song_slug: str,
+    limit: Optional[int] = None,
+) -> List[CandidateTrack]:
     stmt = (
         select(
             Track.id,
@@ -43,8 +47,9 @@ def query_tracks_for_song(db_session: Session, song_slug: str, limit: int = 50) 
         .outerjoin(Show, Show.id == Track.show_id)
         .where(Song.slug == song_slug)
         .order_by(Track.likes_count.desc(), Track.id.desc())
-        .limit(limit)
     )
+    if limit is not None and limit > 0:
+        stmt = stmt.limit(limit)
     rows = db_session.execute(stmt).all()
     return [
         CandidateTrack(
@@ -64,7 +69,7 @@ def query_set_ending_tracks_for_song(
     db_session: Session,
     song_slug: str,
     canonical_set: str,
-    limit: int = 50
+    limit: Optional[int] = None,
 ) -> List[CandidateTrack]:
     """
     Query tracks for a song that were performed as set closers using prebuilt lookup.
@@ -97,18 +102,21 @@ def query_set_ending_tracks_for_song(
         filtered = df[
             (df["song_slug"] == song_slug) &
             ((df["canonical_set"] == "encore") | (df["canonical_set"] == "set2"))
-        ].sort_values("likes_count", ascending=False).head(limit)
+        ].sort_values("likes_count", ascending=False)
     elif canonical_set == "set2":
         filtered = df[
             (df["song_slug"] == song_slug) &
             ((df["canonical_set"] == "set2") | (df["canonical_set"] == "encore"))
-        ].sort_values("likes_count", ascending=False).head(limit)
+        ].sort_values("likes_count", ascending=False)
     else:
         # For Set 1 and Set 3, only use tracks from that specific set
         filtered = df[
             (df["song_slug"] == song_slug) &
             (df["canonical_set"] == canonical_set)
-        ].sort_values("likes_count", ascending=False).head(limit)
+        ].sort_values("likes_count", ascending=False)
+
+    if limit is not None and limit > 0:
+        filtered = filtered.head(limit)
     
     if len(filtered) == 0:
         return []

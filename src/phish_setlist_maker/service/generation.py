@@ -162,19 +162,7 @@ def _select_track_display(
             raise PlaylistServiceError(f"No track recordings available for '{song_title}'.")
         return None
 
-    # Use larger sample size and weighted selection to reduce bias toward "hot" jams
-    # Candidates are ordered by likes DESC, so top = most liked = often longer jams
-    sample_size = min(len(candidates), 50)
-    pool = candidates[:sample_size]
-
-    # Weight selection: exponential decay favors top tracks but gives chances to others
-    # This creates a "jam intensity" spread - not always picking the hottest version
-    weights = [2.0 ** (-i / 10.0) for i in range(len(pool))]  # Decay factor
-    total_weight = sum(weights)
-    normalized_weights = [w / total_weight for w in weights]
-
-    # Weighted random selection
-    selection = rng.choices(pool, weights=normalized_weights, k=1)[0]
+    selection = rng.choice(candidates)
 
     logger.info(
         "Selected local track candidate for %s track_id=%s slug=%s",
