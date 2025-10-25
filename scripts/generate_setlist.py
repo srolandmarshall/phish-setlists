@@ -92,6 +92,12 @@ def parse_args() -> argparse.Namespace:
         metavar="SET=COUNT",
         help="Override a set length (e.g., --set-length set1=11). Repeat as needed.",
     )
+    parser.add_argument(
+        "--jamminess",
+        type=float,
+        metavar="LEVEL",
+        help="Jam intensity (0.0=tight/concise, 0.5=balanced, 1.0=maximum jam). Default: dynamic selection.",
+    )
     parser.set_defaults(allow_previous_show=None)
     return parser.parse_args()
 
@@ -224,6 +230,7 @@ def main() -> None:
         include_html=False,
         prefetch_track_metadata=True,
         fail_on_playlist_error=False,
+        jamminess=args.jamminess,
     )
 
     with session_scope() as session:

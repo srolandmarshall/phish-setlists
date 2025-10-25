@@ -44,12 +44,13 @@ DEFAULT_SET_LENGTHS: Dict[str, int] = {
 
 # Target runtimes in seconds. Two-set shows lean on the baseline values;
 # three-set shows use the overrides defined below.
-# Note: Reduced by ~15% to account for selection bias toward longer/jammier performances
+# Note: Now using dynamic jam intensity selection (30th-90th percentile based on budget)
+#       so targets can be closer to historical averages (Set1: 68min, Set2: 74min, Encore: 16min)
 DEFAULT_SET_DURATION_TARGETS: Dict[str, Tuple[int, int]] = {
-    "set1": (65 * 60, 80 * 60),  # 70-80 minutes (accounts for jam bias)
-    "set2": (65 * 60, 80 * 60),
-    "set3": (65 * 60, 80 * 60),
-    "encore": (12 * 60, 20 * 60),  # 12-20 minutes
+    "set1": (60 * 60, 75 * 60),  # 60-75 minutes (historical avg: 68 min)
+    "set2": (65 * 60, 80 * 60),  # 65-80 minutes (historical avg: 74 min)
+    "set3": (60 * 60, 75 * 60),  # 60-75 minutes
+    "encore": (12 * 60, 20 * 60),  # 12-20 minutes (historical avg: 16 min)
 }
 
 THREE_SET_DURATION_OVERRIDES: Dict[str, Tuple[int, int]] = {

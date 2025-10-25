@@ -101,6 +101,7 @@ class GenerationRequest:
     use_ml_features: bool = True
     ml_placement_weight: float = 0.3
     ml_transition_bonus: float = 0.1
+    jamminess: Optional[float] = None  # 0.0 = tight, 0.5 = balanced, 1.0 = max jam
 
 
 def infer_default_era(year: Optional[int]) -> Optional[str]:
@@ -161,9 +162,19 @@ def _select_track_display(
             raise PlaylistServiceError(f"No track recordings available for '{song_title}'.")
         return None
 
-    sample_size = min(len(candidates), 25)
+    # Use larger sample size and weighted selection to reduce bias toward "hot" jams
+    # Candidates are ordered by likes DESC, so top = most liked = often longer jams
+    sample_size = min(len(candidates), 50)
     pool = candidates[:sample_size]
-    selection = rng.choice(pool)
+
+    # Weight selection: exponential decay favors top tracks but gives chances to others
+    # This creates a "jam intensity" spread - not always picking the hottest version
+    weights = [2.0 ** (-i / 10.0) for i in range(len(pool))]  # Decay factor
+    total_weight = sum(weights)
+    normalized_weights = [w / total_weight for w in weights]
+
+    # Weighted random selection
+    selection = rng.choices(pool, weights=normalized_weights, k=1)[0]
 
     logger.info(
         "Selected local track candidate for %s track_id=%s slug=%s",
@@ -351,6 +362,7 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
         use_ml_features=request.use_ml_features,
         ml_placement_weight=request.ml_placement_weight,
         ml_transition_bonus=request.ml_transition_bonus,
+        jamminess=request.jamminess,
     )
 
     if request.set_lengths:

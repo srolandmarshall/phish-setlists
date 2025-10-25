@@ -176,7 +176,12 @@ class SegmentStatistics:
     top_sequences: List[Tuple[Tuple[str, ...], int]]
     longform_songs: List[Tuple[str, float]]
     adjacency_map: Dict[str, Dict[str, int]]
-    song_durations: Dict[str, float]
+    song_durations: Dict[str, float]  # 80th percentile (backward compat)
+    # Multiple percentiles for dynamic "jam intensity" selection
+    song_durations_p30: Dict[str, float]  # Short/tight versions
+    song_durations_p50: Dict[str, float]  # Median/average versions
+    song_durations_p70: Dict[str, float]  # Above-average jams
+    song_durations_p90: Dict[str, float]  # Full extended jams
 
 
 def segment_statistics(
@@ -269,8 +274,25 @@ def segment_statistics(
     ]
     longform_songs.sort(key=lambda item: item[1], reverse=True)
 
+    # Calculate multiple duration percentiles for dynamic "jam intensity" selection
     song_durations = {
         title: _quantile(values, 0.8) if values else 0.0
+        for title, values in song_duration_samples.items()
+    }
+    song_durations_p30 = {
+        title: _quantile(values, 0.3) if values else 0.0
+        for title, values in song_duration_samples.items()
+    }
+    song_durations_p50 = {
+        title: _quantile(values, 0.5) if values else 0.0
+        for title, values in song_duration_samples.items()
+    }
+    song_durations_p70 = {
+        title: _quantile(values, 0.7) if values else 0.0
+        for title, values in song_duration_samples.items()
+    }
+    song_durations_p90 = {
+        title: _quantile(values, 0.9) if values else 0.0
         for title, values in song_duration_samples.items()
     }
 
@@ -283,6 +305,10 @@ def segment_statistics(
         longform_songs=longform_songs,
         adjacency_map={key: dict(value.items()) for key, value in adjacency_map.items()},
         song_durations=song_durations,
+        song_durations_p30=song_durations_p30,
+        song_durations_p50=song_durations_p50,
+        song_durations_p70=song_durations_p70,
+        song_durations_p90=song_durations_p90,
     )
 
 
