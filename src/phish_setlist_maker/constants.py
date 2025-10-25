@@ -37,7 +37,7 @@ SET_ALIASES: Dict[str, Tuple[str, ...]] = {
 
 DEFAULT_SET_LENGTHS: Dict[str, int] = {
     "set1": 10,
-    "set2": 9,
+    "set2": 11,  # Increased from 9 to better hit 65-80 min target (avg song ~6-7 min)
     "set3": 6,
     "encore": 2,
 }
