@@ -28,7 +28,7 @@ class CandidateTrack:
     metadata_cache: Optional[dict] = None
 
 
-def query_tracks_for_song(db_session: Session, song_slug: str, limit: int = 25) -> List[CandidateTrack]:
+def query_tracks_for_song(db_session: Session, song_slug: str, limit: int = 50) -> List[CandidateTrack]:
     stmt = (
         select(
             Track.id,
@@ -64,7 +64,7 @@ def query_set_ending_tracks_for_song(
     db_session: Session,
     song_slug: str,
     canonical_set: str,
-    limit: int = 25
+    limit: int = 50
 ) -> List[CandidateTrack]:
     """
     Query tracks for a song that were performed as set closers using prebuilt lookup.

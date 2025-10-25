@@ -35,4 +35,5 @@ def build_generation_request(
         use_ml_features=model.use_ml_features,
         ml_placement_weight=model.ml_placement_weight,
         ml_transition_bonus=model.ml_transition_bonus,
+        jamminess=model.jamminess,
     )

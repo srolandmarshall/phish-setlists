@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+import logging
 from pathlib import Path
 from random import Random
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from ..analysis.feature_store import FeatureStore
 from ..constants import (
@@ -76,6 +79,7 @@ class SetlistGenerator:
         ml_placement_weight: float = 0.3,
         ml_transition_bonus: float = 0.1,
         features_dir: Optional[Path] = None,
+        jamminess: Optional[float] = None,
     ):
         self.session = session
         self.rng = rng or Random()
@@ -84,6 +88,9 @@ class SetlistGenerator:
         self._use_ml_features = use_ml_features
         self._ml_placement_weight = ml_placement_weight
         self._ml_transition_bonus = ml_transition_bonus
+        # Jamminess: 0.0 = tight/concise, 0.5 = balanced, 1.0 = maximum jams
+        # None = use dynamic intensity based on remaining budget
+        self._jamminess = max(0.0, min(1.0, jamminess)) if jamminess is not None else None
         
         self._feature_store: Optional[FeatureStore] = None
         if use_ml_features:
@@ -121,6 +128,7 @@ class SetlistGenerator:
         # Add hardcoded fallback exclusions (in case CSV missing)
         excluded.update([
             "Banter",
+            "Interview",  # Spoken content, equivalent to banter
             "Audience Chess Move",
             "Happy Birthday to You",
             "Soundcheck",
@@ -204,6 +212,19 @@ class SetlistGenerator:
             year=year,
         )
 
+        # Era filtering diagnostics - warn if pool is too restricted
+        eligible_count = len(seen_songs)
+        if eligible_count < 50:
+            logger.warning(
+                f"Era filtering resulted in only {eligible_count} eligible songs "
+                f"(era={era}, year={year}). This may cause incomplete sets."
+            )
+        elif eligible_count < 100:
+            logger.info(
+                f"Era filtering resulted in {eligible_count} eligible songs "
+                f"(era={era}, year={year}). Set variety may be limited."
+            )
+
         frequencies_by_set = song_frequencies_by_set(
             self.session,
             cutoff_date=cutoff,
@@ -239,6 +260,13 @@ class SetlistGenerator:
             )
             metadata_notes.append(
                 f"Excluded {len(previous_show_songs)} songs played on {label}"
+            )
+
+        # Add note if era filtering significantly restricts the pool
+        if eligible_count < 50:
+            metadata_notes.append(
+                f"Limited to {eligible_count} eligible songs due to era/year filtering. "
+                "Sets may be shorter than typical."
             )
 
         sets: List[SetSegment] = []
@@ -505,6 +533,68 @@ class SetlistGenerator:
 
         return songs, notes
 
+    def _select_duration_map_by_intensity(
+        self,
+        stats: Optional[SegmentStatistics],
+        current_duration: float,
+        duration_target: Optional[Tuple[int, int]],
+    ) -> Dict[str, float]:
+        """Select appropriate duration percentile based on jam intensity.
+
+        If user specified jamminess, use that as override.
+        Otherwise, use dynamic selection based on remaining budget.
+
+        Jamminess scale:
+        - 0.0-0.25: Tight/concise (30th percentile)
+        - 0.25-0.5: Balanced (50th percentile)
+        - 0.5-0.75: Jammy (70th percentile)
+        - 0.75-1.0: Maximum jam (90th percentile)
+        """
+        if not stats:
+            return {}
+
+        # User-specified jamminess overrides dynamic selection
+        if self._jamminess is not None:
+            if self._jamminess < 0.25:
+                return stats.song_durations_p30  # Tight/concise
+            elif self._jamminess < 0.5:
+                return stats.song_durations_p50  # Balanced
+            elif self._jamminess < 0.75:
+                return stats.song_durations_p70  # Jammy
+            else:
+                return stats.song_durations_p90  # Maximum jam
+
+        # Dynamic selection based on remaining budget (original behavior)
+        if not duration_target:
+            return stats.song_durations_p50  # Safe default
+
+        lower, upper = duration_target
+        target_mid = (lower + upper) / 2
+
+        # Calculate how full the set is (0.0 = empty, 1.0 = full)
+        # This is the INVERSE of remaining budget - when set is empty, we need to be conservative
+        filled_ratio = current_duration / target_mid if target_mid > 0 else 0.0
+
+        # Be conservative early (leave room), can be jammier later
+        # Early in set (0-40% full): Use tight/median versions to leave room
+        # Middle (40-70% full): Use median/above-average
+        # Late (70%+ full): Committed to the duration, adjust as needed
+        if filled_ratio < 0.4:
+            # Early in set - be conservative, use median or lower
+            return stats.song_durations_p50  # Median/average
+        elif filled_ratio < 0.7:
+            # Middle of set - can use above-average
+            return stats.song_durations_p70  # Above-average jams
+        else:
+            # Late in set - adjust based on how close we are to target
+            remaining = max(0, target_mid - current_duration)
+            if remaining > 600:  # More than 10 minutes left
+                return stats.song_durations_p70  # Can still fit above-average
+            elif remaining > 300:  # 5-10 minutes left
+                return stats.song_durations_p50  # Median
+            else:
+                return stats.song_durations_p30  # Need tight versions
+
     def _select_with_duration_budget(
         self,
         *,
@@ -520,6 +610,7 @@ class SetlistGenerator:
         duration_target: Optional[Tuple[int, int]],
         previous_sets_songs: Optional[Dict[str, List[str]]] = None,
     ) -> Tuple[List[str], bool, float]:
+        # Use 80th percentile for fallback calculations (backward compat)
         song_durations = stats.song_durations if stats else {}
         safety_factor = self._duration_safety_factor if duration_target else 1.0
 
@@ -550,8 +641,20 @@ class SetlistGenerator:
         if duration_target:
             lower, upper = duration_target
             window = max(upper - lower, 0)
-            margin = min(int(window * self._duration_margin_ratio), self._duration_margin_cap)
-            adjusted_upper = max(lower, upper - margin)
+
+            # Relax duration constraints based on jamminess level
+            if self._jamminess is not None and self._jamminess >= 0.9:
+                # At very high jamminess (0.9+), be VERY permissive - add 50% to upper bound
+                # User explicitly wants extended jams, duration targets are soft suggestions
+                adjusted_upper = upper * 1.5
+            elif self._jamminess is not None and self._jamminess >= 0.75:
+                # At high jamminess (0.75-0.9), be more permissive - add 25% to upper bound
+                adjusted_upper = upper * 1.25
+            else:
+                # Default behavior - enforce duration targets with normal margin
+                margin = min(int(window * self._duration_margin_ratio), self._duration_margin_cap)
+                adjusted_upper = max(lower, upper - margin)
+
             max_duration = float(adjusted_upper)
 
         base_song_count = len(base_songs)
@@ -583,7 +686,7 @@ class SetlistGenerator:
                     # Skip this song, try another
                     pool = [freq for freq in pool if freq.title != choice]
                     continue
-                
+
                 # NEW: Check cross-set dependencies (Phase 2.2b - Tweezer Reprise)
                 # Example: Tweezer Reprise in encore requires Tweezer in earlier sets
                 if previous_sets_songs:
@@ -594,7 +697,11 @@ class SetlistGenerator:
                         pool = [freq for freq in pool if freq.title != choice]
                         continue
 
-            candidate_duration = song_durations.get(choice, fallback_duration) * safety_factor
+            # NEW: Dynamic jam intensity - select duration percentile based on remaining budget
+            dynamic_durations = self._select_duration_map_by_intensity(
+                stats, current_duration, duration_target
+            )
+            candidate_duration = dynamic_durations.get(choice, fallback_duration) * safety_factor
             estimated_total = current_duration + candidate_duration
 
             if (
