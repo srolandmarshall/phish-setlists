@@ -13,16 +13,19 @@ Implemented user-controlled jamminess parameter to give users fine-grained contr
 ## Problem Statement
 
 ### 1. Uncontrolled Set Durations
+
 - Sets were generating inconsistently long (2+ hours) due to biased song selection
 - Set 2 had only ~9% compliance with 65-80 minute target
 - Duration capping logic was working against the duration targets instead of enforcing them
 
 ### 2. No User Control Over Intensity
+
 - Users had no way to influence whether they got "greatest hits" (short, packed) or "extended jams" (long, exploratory)
 - System used fixed percentile (p80) for all song durations
 - No way to explore different play styles
 
 ### 3. Inconsistent Set Lengths
+
 - Set 1: 10 songs (default)
 - Set 2: 9 songs (default)
 - But with different jam intensities, this should vary
@@ -34,6 +37,7 @@ Implemented user-controlled jamminess parameter to give users fine-grained contr
 ### Core Components
 
 #### 1. Multi-Percentile Duration System
+
 Instead of using only p80 (80th percentile), the system now stores and uses multiple percentile durations for each song:
 
 ```python
@@ -45,7 +49,9 @@ song_durations_p90: Dict[str, float]  # Full extended jams (80th → 90th for co
 ```
 
 #### 2. Dynamic Percentile Selection (`_select_duration_map_by_intensity`)
+
 Selects which percentile to use based on either:
+
 - **User-specified jamminess** (0.0-1.0): Directly maps to percentile
 - **Dynamic calculation** based on remaining budget:
   - Early in set (0-40% full): p50 (conservative, leaves room)
@@ -53,13 +59,16 @@ Selects which percentile to use based on either:
   - Late in set (70%+ full): Dynamic (tight to finish within budget)
 
 **Jamminess Scale**:
+
 - `0.0-0.25`: Tight/concise (p30)
 - `0.25-0.5`: Balanced (p50)
 - `0.5-0.75`: Jammy (p70)
 - `0.75-1.0`: Maximum jam (p90)
 
 #### 3. Constraint Relaxation
+
 Duration targets scale with jamminess:
+
 - `jamminess >= 0.9`: Upper bound × 1.5 (50% increase)
   - Set 1: 60-75min → 60-112min
   - Set 2: 65-80min → 65-120min
@@ -69,7 +78,9 @@ Duration targets scale with jamminess:
 - `jamminess < 0.75`: Normal targets (60-75min Set 1, 65-80min Set 2)
 
 #### 4. Dynamic Song Count Adjustment
+
 Fewer high-intensity songs when using longer percentiles:
+
 - `jamminess >= 0.75`: Reduce by 1 song per set
   - Set 1: 10 → 9 songs
   - Set 2: 11 → 10 songs
@@ -83,6 +94,7 @@ Fewer high-intensity songs when using longer percentiles:
 ### Files Modified
 
 #### `src/phish_setlist_maker/constants.py` (Line 40)
+
 ```python
 DEFAULT_SET_LENGTHS: Dict[str, int] = {
     "set1": 10,
@@ -95,6 +107,7 @@ DEFAULT_SET_LENGTHS: Dict[str, int] = {
 #### `src/phish_setlist_maker/generator/core.py`
 
 **Dynamic Song Count Adjustment** (Lines 186-193):
+
 ```python
 # Adjust song counts based on jamminess level
 # High jamminess (extended jams) → fewer songs needed to fill duration
@@ -107,6 +120,7 @@ if self._jamminess is not None and self._jamminess >= 0.75:
 ```
 
 **Duration Constraint Relaxation** (Lines 645-658):
+
 ```python
 if duration_target:
     lower, upper = duration_target
@@ -126,6 +140,7 @@ if duration_target:
 ```
 
 **Percentile Selection Logic** (Lines 536-600):
+
 ```python
 def _select_duration_map_by_intensity(self, stats, current_duration, duration_target):
     """Select appropriate duration percentile based on jam intensity."""
@@ -166,7 +181,9 @@ def _select_duration_map_by_intensity(self, stats, current_duration, duration_ta
 ```
 
 #### `src/phish_setlist_maker/generator/historical.py`
+
 Added multi-percentile duration storage to `SegmentStatistics`:
+
 ```python
 @dataclass(frozen=True)
 class SegmentStatistics:
@@ -179,6 +196,7 @@ class SegmentStatistics:
 ```
 
 #### `src/phish_setlist_maker/service/generation.py`
+
 ```python
 @dataclass(frozen=True)
 class GenerationRequest:
@@ -187,6 +205,7 @@ class GenerationRequest:
 ```
 
 #### `src/phish_setlist_maker/api/schemas.py`
+
 ```python
 class GenerateRequestModel(BaseModel):
     # ... existing fields ...
@@ -201,11 +220,13 @@ class GenerateRequestModel(BaseModel):
 ### API Integration
 
 #### CLI
+
 ```bash
 poetry run phish-setlist-maker generate --jamminess 0.5
 ```
 
 #### REST API
+
 ```bash
 # Tight (concise, more songs)
 curl "http://localhost:8000/generate?jamminess=0.01"
@@ -223,30 +244,34 @@ curl -X POST http://localhost:8000/generate \
 ```
 
 #### Web UI
+
 Jam Dial slider on landing page (`static/index.html`):
+
 - Checkbox to enable/disable
 - Slider from 0-100 (maps to 0.0-1.0)
-- Dynamic warnings:
-  - `>0.666`: "⚠️ Dial at your own risk. Expect cosmic madness at full send."
-  - `<0.333`: "😴 Playing it safe, huh? Don't worry, we won't tell anyone."
+- Dynamic warnings
 
 ---
 
 ## Bug Fixes
 
 ### Bug #1: Set 2 Duration Undershooting (CRITICAL)
+
 **Symptom**: Set 2 hitting target range only ~9% of the time
 **Root Cause**:
+
 - `DEFAULT_SET_LENGTHS["set2"]` was 9 songs (too few for 65-80 min target)
 - Duration margin calculation was subtracting from upper bound instead of using it as target
 
 **Fix**:
+
 - Increased Set 2 default from 9 to 11 songs
 - Changed margin logic from `adjusted_upper = max(lower, upper - margin)` to `adjusted_upper = upper`
 
 **Result**: Set 2 compliance improved from **9% → 85-90%**
 
 ### Bug #2: Duration Capping Over-Constraining (MODERATE)
+
 **Symptom**: Sets exceeding duration targets when using high percentiles
 **Root Cause**: Margin calculation was reducing the upper bound, making it impossible to hit targets with longer songs
 
@@ -260,21 +285,22 @@ Jam Dial slider on landing page (`static/index.html`):
 
 ### Compliance Testing (N=50 setlists each)
 
-| Jamminess | Set 1 | Set 2 | Target |
-|-----------|-------|-------|--------|
-| **0.01 (Tight)** | 100% ✓ | 84% ✓ | 60-75min, 65-80min |
-| **0.5 (Balanced)** | 92% ✓ | 90% ✓ | 60-75min, 65-80min |
+| Jamminess            | Set 1  | Set 2 | Target               |
+| -------------------- | ------ | ----- | -------------------- |
+| **0.01 (Tight)**     | 100% ✓ | 84% ✓ | 60-75min, 65-80min   |
+| **0.5 (Balanced)**   | 92% ✓  | 90% ✓ | 60-75min, 65-80min   |
 | **0.99 (Full Send)** | 100% ✓ | 98% ✓ | 60-112min, 65-120min |
 
 ### Song Count Behavior
 
-| Jamminess | Set 1 Songs | Set 2 Songs | Avg Duration |
-|-----------|-------------|-------------|--------------|
-| **0.01** | 10.0 | 11.1 | 70min / 78min |
-| **0.5** | 10.0 | 10.7 | 70min / 75min |
-| **0.99** | 9.0 | 10.1 | 63min / 70min |
+| Jamminess | Set 1 Songs | Set 2 Songs | Avg Duration  |
+| --------- | ----------- | ----------- | ------------- |
+| **0.01**  | 10.0        | 11.1        | 70min / 78min |
+| **0.5**   | 10.0        | 10.7        | 70min / 75min |
+| **0.99**  | 9.0         | 10.1        | 63min / 70min |
 
 ### Key Observations
+
 1. **Tight setlists** (0.01): More songs, shorter versions
 2. **Balanced setlists** (0.5): Comfortable middle ground
 3. **Extended jams** (0.99): Fewer songs, longer individual performances
@@ -284,18 +310,22 @@ Jam Dial slider on landing page (`static/index.html`):
 ## Analysis Scripts
 
 ### `scripts/analyze_jamminess_with_charts.py`
+
 Generates matplotlib charts comparing jamminess levels:
+
 - 9-subplot visualization with distributions, box plots, histograms
 - High-resolution PNG output (`jamminess_analysis.png`)
 - Statistical summaries and compliance reporting
 
 **Usage**:
+
 ```bash
 poetry run python scripts/analyze_jamminess_with_charts.py
 # Generates: jamminess_analysis.png
 ```
 
 **Output**: 3x3 grid showing:
+
 1. Set 1 duration distribution
 2. Set 2 duration distribution
 3. Song count comparison
@@ -311,12 +341,15 @@ poetry run python scripts/analyze_jamminess_with_charts.py
 ## User Experience
 
 ### Web Interface
+
 Users see the Jam Dial on the landing page:
+
 - **Unchecked** (default): Dynamic intensity based on budget
 - **Checked + Slider**: Manual control from 0-100 (Tight → Full Send)
 - **Real-time feedback**: Warning messages at extremes
 
 ### Backend Behavior
+
 - **None** (default): Dynamic percentile selection based on remaining time
 - **0.0-0.25**: Tight (p30 durations, may add songs)
 - **0.25-0.5**: Balanced (p50 durations, standard counts)
@@ -324,6 +357,7 @@ Users see the Jam Dial on the landing page:
 - **0.75-1.0**: Extended (p90 durations, reduce song counts)
 
 ### Consistency
+
 - Duration targets automatically relax at high jamminess
 - Song counts automatically adjust to keep durations consistent
 - User expectations matched: "tight" = more songs, "jammy" = fewer songs
@@ -333,6 +367,7 @@ Users see the Jam Dial on the landing page:
 ## Technical Debt & Future Work
 
 ### Potential Enhancements
+
 1. **Jamminess presets**: "Greatest Hits", "Balanced", "Deep Dive", "Full Send"
 2. **Set-specific control**: Different jamminess per set
 3. **Jam length modeling**: Predict optimal jam count based on band's era
@@ -340,6 +375,7 @@ Users see the Jam Dial on the landing page:
 5. **Playlist commentary**: Add notes about jam intensity to generated playlists
 
 ### Known Limitations
+
 1. Jamminess affects only duration percentiles, not song selection probabilities
 2. No learning from user preferences
 3. Dynamic intensity doesn't account for song type (opener vs. closer)
@@ -365,9 +401,11 @@ Users see the Jam Dial on the landing page:
 ## Files Changed Summary
 
 ### New Files
+
 - `scripts/analyze_jamminess_with_charts.py` - Analysis script with matplotlib
 
 ### Modified Files
+
 - `src/phish_setlist_maker/constants.py` - Set 2 default length
 - `src/phish_setlist_maker/generator/core.py` - Jamminess logic
 - `src/phish_setlist_maker/generator/historical.py` - Multi-percentile storage
