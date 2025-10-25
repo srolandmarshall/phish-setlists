@@ -33,6 +33,7 @@
 - **Multi-Percentile Durations**: Different song lengths based on intensity level
 - **Constraint Relaxation**: Duration targets scale from 60-75min (normal) to 60-112min (0.99)
 - **Smart Song Counts**: 9-10 songs at high jamminess, 10-11 at default/tight
+- **Balanced Playlist Sampling**: Landing-page playlists now choose uniformly from *all* recordings, not just the top 50 liked versions, so low jamminess surfaces concise takes instead of defaulting to legendary 25-minute jams.
 - **Analysis Tools**: Matplotlib charts for validation and visualization
 
 ---

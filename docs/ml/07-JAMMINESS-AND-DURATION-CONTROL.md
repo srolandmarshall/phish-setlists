@@ -360,6 +360,7 @@ Users see the Jam Dial on the landing page:
 
 - Duration targets automatically relax at high jamminess
 - Song counts automatically adjust to keep durations consistent
+- Playlist audio selection now samples uniformly from all available recordings (instead of the “top 50” most-liked takes), so low jamminess levels actually return shorter/average performances while high jamminess still benefits from the longer historical versions.
 - User expectations matched: "tight" = more songs, "jammy" = fewer songs
 
 ---
@@ -380,6 +381,7 @@ Users see the Jam Dial on the landing page:
 2. No learning from user preferences
 3. Dynamic intensity doesn't account for song type (opener vs. closer)
 4. Three-set shows use fixed ratios (could be dynamic)
+5. Playlist selection is uniform; future work could bias toward percentile-aligned recordings (e.g., pick p30 takes when jamminess is low) to further tighten the perceived runtime.
 
 ---
 
