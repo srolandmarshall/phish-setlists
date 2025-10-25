@@ -18,7 +18,7 @@ def test_jamminess_levels():
     levels = [
         (0.0, "Tight & Tidy (p30)"),
         (0.3, "Easy Does It (p50)"),
-        (0.6, "Getting Spacey (p70)"),
+        (0.6, "Run of the Mill (p70)"),
         (0.9, "FULL SEND (p90)"),
         (None, "Dynamic (auto)"),
     ]
