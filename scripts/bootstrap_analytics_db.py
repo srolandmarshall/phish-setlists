@@ -19,33 +19,36 @@ from phish_setlist_maker.config import (
 
 def ensure_database(create: bool, drop: bool) -> int:
     analytics_settings = get_analytics_database_settings()
-    analytics_url = analytics_settings.url()
+    analytics_url_full = analytics_settings.url(hide_password=False)
+    analytics_url_safe = str(analytics_settings)
 
-    primary_url = get_database_settings().url()
+    primary_settings = get_database_settings()
+    primary_url_full = primary_settings.url(hide_password=False)
+    primary_url_safe = str(primary_settings)
 
-    if analytics_url == primary_url:
+    if analytics_url_full == primary_url_full:
         print(
             "Analytics database shares credentials with the primary database.\n"
             "Configure ANALYTICS_DB_* variables to isolate a scratch workspace."
         )
         return 0
 
-    exists = database_exists(analytics_url)
+    exists = database_exists(analytics_url_full)
 
     if drop and exists:
-        print(f"Dropping analytics database: {analytics_url}")
-        drop_database(analytics_url)
+        print(f"Dropping analytics database: {analytics_url_safe}")
+        drop_database(analytics_url_full)
         exists = False
 
     if create:
         if not exists:
-            print(f"Creating analytics database: {analytics_url}")
-            create_database(analytics_url)
+            print(f"Creating analytics database: {analytics_url_safe}")
+            create_database(analytics_url_full)
         else:
             print("Analytics database already exists; skipping creation.")
 
-    print("Analytics database URL:", analytics_url)
-    print("Primary database URL  :", primary_url)
+    print("Analytics database URL:", analytics_url_safe)
+    print("Primary database URL  :", primary_url_safe)
     print(
         "\nNext steps:\n"
         "  • Use pg_dump/pg_restore (or psql COPY) to seed the analytics DB.\n"
@@ -55,7 +58,9 @@ def ensure_database(create: bool, drop: bool) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Bootstrap the analytics database workspace.")
+    parser = argparse.ArgumentParser(
+        description="Bootstrap the analytics database workspace."
+    )
     parser.add_argument(
         "--create",
         action="store_true",

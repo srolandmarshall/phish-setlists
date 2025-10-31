@@ -204,6 +204,7 @@ def _select_track_display(
         duration_seconds=duration_seconds,
         origin=origin_text,
         show_date=show_date,
+        track_id=selection.track_id,
     )
 
 

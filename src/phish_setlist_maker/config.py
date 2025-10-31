@@ -21,7 +21,13 @@ class DatabaseSettings:
     port: int = 5432
     name: str = "phish-setlist-maker"
 
-    def url(self) -> str:
+    def url(self, hide_password: bool = True) -> str:
+        """Return the database URL string.
+
+        Default is to hide the password to avoid accidental leakage when
+        URLs are logged or printed. Callers that require the full URL for
+        engine creation should pass `hide_password=False` explicitly.
+        """
         url = URL.create(
             "postgresql+psycopg2",
             username=self.user,
@@ -30,13 +36,28 @@ class DatabaseSettings:
             port=self.port,
             database=self.name,
         )
-        return url.render_as_string(hide_password=False)
+        return url.render_as_string(hide_password=hide_password)
+
+    def __str__(self) -> str:
+        """Redacted string representation safe for logging.
+
+        Example: postgresql+psycopg2://user:*****@host:5432/dbname
+        """
+        try:
+            return self.url(hide_password=True)
+        except Exception:
+            # Fallback to minimal redacted form if URL construction fails
+            host = self.host or "<host>"
+            port = self.port or 0
+            name = self.name or "<db>"
+            user = self.user or "<user>"
+            return f"postgresql+psycopg2://{user}:*****@{host}:{port}/{name}"
 
 
 def _parse_database_url(url: str) -> DatabaseSettings:
     """Parse DATABASE_URL into DatabaseSettings."""
     from urllib.parse import urlparse
-    
+
     parsed = urlparse(url)
     return DatabaseSettings(
         user=parsed.username or "",
@@ -47,13 +68,15 @@ def _parse_database_url(url: str) -> DatabaseSettings:
     )
 
 
-def _build_database_settings(prefix: str, *, fallback: DatabaseSettings | None = None) -> DatabaseSettings:
+def _build_database_settings(
+    prefix: str, *, fallback: DatabaseSettings | None = None
+) -> DatabaseSettings:
     # Check for DATABASE_URL first (common in cloud deployments)
     if prefix == "DB":
         database_url = os.getenv("DATABASE_URL")
         if database_url:
             return _parse_database_url(database_url)
-    
+
     user_key = f"{prefix}_USER"
     password_key = f"{prefix}_PASS"
     host_key = f"{prefix}_HOST"
@@ -67,12 +90,16 @@ def _build_database_settings(prefix: str, *, fallback: DatabaseSettings | None =
         host = os.getenv(host_key, fallback.host if fallback else "localhost")
         port = int(os.getenv(port_key, str(fallback.port if fallback else 5432)))
         name = os.getenv(name_key, fallback.name if fallback else "phish-setlist-maker")
-        return DatabaseSettings(user=user, password=password, host=host, port=port, name=name)
+        return DatabaseSettings(
+            user=user, password=password, host=host, port=port, name=name
+        )
 
     if fallback:
         return fallback
 
-    missing = [key for key, value in [(user_key, user), (password_key, password)] if not value]
+    missing = [
+        key for key, value in [(user_key, user), (password_key, password)] if not value
+    ]
     raise RuntimeError(
         f"Missing database credentials in environment variables: {', '.join(missing)}"
     )

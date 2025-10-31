@@ -22,7 +22,10 @@ def get_engine(echo: bool = False) -> Engine:
     global _engine
     if _engine is None:
         db_settings = get_database_settings()
-        _engine = create_engine(db_settings.url(), echo=echo, future=True)
+        # Request the full URL (including password) explicitly for engine creation
+        _engine = create_engine(
+            db_settings.url(hide_password=False), echo=echo, future=True
+        )
     return _engine
 
 
@@ -42,7 +45,10 @@ def get_analytics_engine(echo: bool = False) -> Engine:
     global _analytics_engine
     if _analytics_engine is None:
         db_settings = get_analytics_database_settings()
-        _analytics_engine = create_engine(db_settings.url(), echo=echo, future=True)
+        # Explicitly request the full analytics DB URL for engine creation
+        _analytics_engine = create_engine(
+            db_settings.url(hide_password=False), echo=echo, future=True
+        )
     return _analytics_engine
 
 

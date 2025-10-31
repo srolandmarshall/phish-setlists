@@ -10,6 +10,7 @@ This repository contains utilities, a smart generator, and notebooks used while 
 
 - **Generate synthetic setlists** with companion playlists (M3U) and HTML summaries
 - **ML-enhanced generation** using historical placement probabilities and transition patterns (Phase 2)
+- **Interactive track tooltips** showing detailed performance info from Phish.in on hover
 - **Authentic set closers** with weighted selection and actual set-ending track versions
 - **Intelligent frequency capping** to prevent rare songs from appearing too often
 - **FastAPI REST API** for programmatic access
@@ -17,6 +18,13 @@ This repository contains utilities, a smart generator, and notebooks used while 
 - **Analytics & Features**: Exploratory notebooks and pre-computed feature tables (Phase 1)
 
 ### Recent Improvements (October 2025)
+
+**Track Information Tooltips** ✨ NEW
+- **Click/tap for details**: Click any song to see performance information (mobile-friendly!)
+- **Rich data display**: Show date, venue, duration, likes count, jamchart notes, and teases
+- **Powered by Phish.in API**: Real-time data fetching with client-side caching
+- **Smart positioning**: Tooltips automatically adjust to stay on screen
+- **Fully responsive**: Works great on mobile, tablet, and desktop
 
 **Phase 2.6: Jamminess & Duration Control** ✅
 - **Jamminess Parameter**: 0.0 (tight/concise) to 1.0 (extended jams) slider on landing page

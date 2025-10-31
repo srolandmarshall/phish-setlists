@@ -38,6 +38,7 @@ def build_playlist_sections(
                 mp3_url=song.mp3_url if include_audio_links else None,
                 duration=song.duration_label,
                 origin=song.origin,
+                track_id=song.track_id,
             )
             for song in segment.tracks
         ]
@@ -52,6 +53,7 @@ def build_playlist_sections(
                 mp3_url=song.mp3_url if include_audio_links else None,
                 duration=song.duration_label,
                 origin=song.origin,
+                track_id=song.track_id,
             )
             for song in encore.tracks
         ]

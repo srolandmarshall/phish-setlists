@@ -20,6 +20,7 @@ class PlaylistLink:
     mp3_url: Optional[str] = None
     duration: Optional[str] = None
     origin: Optional[str] = None
+    track_id: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -40,14 +41,16 @@ def _render_context(generated: GeneratedSetlist, generated_at: datetime) -> str:
     ]
     rows = "\n".join(f"          <li>{value}</li>" for value in items)
     return (
-        '      <section class="card">\n'
-        "        <h2>Context</h2>\n"
-        "        <ul>\n"
+        '      <section class="card context-card">\n'
+        '        <h2 class="context-toggle">Context <span class="toggle-icon">▼</span></h2>\n'
+        '        <div class="context-content">\n'
+        "          <ul>\n"
         f"{rows}\n"
-        "        </ul>\n"
-        '        <p style="margin-top: 1em; font-size: 0.9em; color: #666;">\n'
-        '          Data source: <a href="https://phish.in/" target="_blank">Phish.in</a> (MIT License)\n'
-        "        </p>\n"
+        "          </ul>\n"
+        '          <p style="margin-top: 1em; font-size: 0.9em; color: #666;">\n'
+        '            Data source: <a href="https://phish.in/" target="_blank">Phish.in</a> (MIT License)\n'
+        "          </p>\n"
+        "        </div>\n"
         "      </section>\n"
     )
 
@@ -62,12 +65,14 @@ def _render_section(section: PlaylistSection, include_links: bool) -> str:
         cell_parts = []
         if include_links and link.mp3_url:
             href = escape(link.mp3_url, quote=True)
+            track_id_attr = f' data-track-id="{link.track_id}"' if link.track_id else ''
             cell_parts.append(
-                f'<a href="#" data-audio-url="{href}">{display_title}</a>'
+                f'<a href="#" data-audio-url="{href}"{track_id_attr}>{display_title}</a>'
             )
         elif link.mp3_url and not include_links:
             href = escape(link.mp3_url, quote=True)
-            cell_parts.append(f'<a href="{href}">{display_title}</a>')
+            track_id_attr = f' data-track-id="{link.track_id}"' if link.track_id else ''
+            cell_parts.append(f'<a href="{href}"{track_id_attr}>{display_title}</a>')
         else:
             cell_parts.append(display_title)
 
@@ -265,6 +270,10 @@ def build_html_markup(
 
     body.append("    </main>\n")
 
+    # Always include the tooltip script for track information
+    tooltip_script_href = escape("/static/tooltip.js", quote=True)
+    body.append(f'    <script src="{tooltip_script_href}"></script>\n')
+
     if playlist_filename:
         if script_src:
             script_href = escape(script_src, quote=True)
@@ -286,6 +295,7 @@ def build_html_markup(
         '<html lang="en">\n',
         "<head>\n",
         '  <meta charset="utf-8" />\n',
+        '  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n',
         f"  <title>{escape(page_title)}</title>\n",
         f'  <link rel="stylesheet" href="{stylesheet_attr}">\n',
         "</head>\n",
