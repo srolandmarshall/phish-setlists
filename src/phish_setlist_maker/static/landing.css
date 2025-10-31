@@ -411,3 +411,54 @@ hr.features-divider {
     opacity: 0.7;
   }
 }
+
+/* New badge for features page */
+.new-badge {
+  display: inline-block;
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  color: white;
+  font-size: 0.7em;
+  font-weight: bold;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-right: 8px;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Button group for features page */
+.button-group {
+  display: flex;
+  gap: 12px;
+  margin-top: 30px;
+  justify-content: center;
+}
+
+@media (max-width: 600px) {
+  .button-group {
+    flex-direction: column;
+  }
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.btn-primary:hover {
+  background: linear-gradient(135deg, #5568d3 0%, #63408a 100%);
+  transform: translateY(-2px);
+}
+
+/* Features page h2 styling */
+.features h2 {
+  font-size: 1.4em;
+  color: #333;
+  margin-top: 1.5em;
+  margin-bottom: 0.75em;
+}
+
+.features h2:first-child {
+  margin-top: 0;
+}

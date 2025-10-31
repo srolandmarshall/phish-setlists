@@ -6,37 +6,21 @@ This repository contains utilities, a smart generator, and notebooks used while 
 
 **Data Attribution**: All Phish show and setlist data is sourced from [Phish.in](https://phish.in/), a comprehensive archive of Phish recordings and setlists. This project would not be possible without their incredible work maintaining this community resource. Phish.in data is provided under the MIT License.
 
-## Highlights
+## Features
 
-- **Generate synthetic setlists** with companion playlists (M3U) and HTML summaries
-- **ML-enhanced generation** using historical placement probabilities and transition patterns (Phase 2)
-- **Interactive track tooltips** showing detailed performance info from Phish.in on hover
-- **Authentic set closers** with weighted selection and actual set-ending track versions
-- **Intelligent frequency capping** to prevent rare songs from appearing too often
-- **FastAPI REST API** for programmatic access
-- **Local-first**: uses a Postgres database dump / local DB for historical data
-- **Analytics & Features**: Exploratory notebooks and pre-computed feature tables (Phase 1)
+For a complete list of features and recent improvements, see [docs/TOOLTIP-FEATURE.md](docs/TOOLTIP-FEATURE.md) and other documentation in the [docs/](docs/) directory.
 
-### Recent Improvements (October 2025)
+**Highlights:**
+- 🎸 **ML-Enhanced Generation** - Historical placement probabilities and transition patterns
+- 🎵 **Interactive Tooltips** - Click songs for performance details from Phish.in (NEW!)
+- 📱 **Mobile-Friendly** - Fully responsive design with touch-optimized UI
+- 🎚️ **Jamminess Control** - Dial up or down jam intensity (0.0-1.0)
+- 🎯 **Weighted Set Closers** - Authentic set-ending selections
+- 📊 **40+ Years of Data** - Powered by comprehensive Phish.in archive
+- 🔗 **Phish.in Integration** - Direct links to full shows
+- 🎭 **Era-Aware** - Filter by 1.0, 2.0, 3.0, or 4.0 eras
 
-**Track Information Tooltips** ✨ NEW
-- **Click/tap for details**: Click any song to see performance information (mobile-friendly!)
-- **Rich data display**: Show date, venue, duration, likes count, jamchart notes, and teases
-- **Powered by Phish.in API**: Real-time data fetching with client-side caching
-- **Smart positioning**: Tooltips automatically adjust to stay on screen
-- **Fully responsive**: Works great on mobile, tablet, and desktop
-
-**Phase 2.6: Jamminess & Duration Control** ✅
-- **Jamminess Parameter**: 0.0 (tight/concise) to 1.0 (extended jams) slider on landing page
-- **Multi-Percentile System**: Uses p30/p50/p70/p90 song durations based on jam intensity
-- **Dynamic Song Counts**: High jamminess (≥0.75) reduces songs (9-10 vs default 10-11) to maintain consistent duration
-- **Constraint Relaxation**: Duration targets scale from 60-75min (normal) to 60-112min (at 0.99 jamminess)
-- **Fixed Critical Bug**: Set 2 compliance improved from **9% → 85-90%** by increasing default from 9 to 11 songs
-
-**Phase 2.5: Set-Ending Song Selection & Frequency Caps** ✅
-- Set 1 and Set 2 closers weighted by historical ending probability
-- Songs with <50 appearances downweighted; rare song overuse reduced by 75-80%
-- Era-aware exclusions (e.g., "I Am the Walrus" only in 4.0 era)
+Visit `/features` when running the app to see the complete feature list.
 
 ## Quick start
 

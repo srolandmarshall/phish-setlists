@@ -51,6 +51,16 @@ def health() -> HealthResponse:
     return HealthResponse()
 
 
+@app.get("/features", response_class=HTMLResponse, tags=["status"])
+def features() -> HTMLResponse:
+    """Features page with comprehensive feature list."""
+    features_path = STATIC_DIR / "features.html"
+    if features_path.exists():
+        return HTMLResponse(content=features_path.read_text())
+    # Fallback if static file missing
+    return HTMLResponse(content="<h1>Features</h1><p><a href='/'>Home</a></p>")
+
+
 @app.get("/generate", response_class=HTMLResponse, tags=["generation"])
 def generate_html(
     reference_date: Optional[date] = Query(None),
