@@ -66,18 +66,17 @@ def _render_section(section: PlaylistSection, include_links: bool) -> str:
         if include_links and link.mp3_url:
             href = escape(link.mp3_url, quote=True)
             track_id_attr = f' data-track-id="{link.track_id}"' if link.track_id else ''
+            origin_attr = f' data-origin="{escape(link.origin, quote=True)}"' if link.origin else ''
             cell_parts.append(
-                f'<a href="#" data-audio-url="{href}"{track_id_attr}>{display_title}</a>'
+                f'<a href="#" data-audio-url="{href}"{track_id_attr}{origin_attr}>{display_title}</a>'
             )
         elif link.mp3_url and not include_links:
             href = escape(link.mp3_url, quote=True)
             track_id_attr = f' data-track-id="{link.track_id}"' if link.track_id else ''
-            cell_parts.append(f'<a href="{href}"{track_id_attr}>{display_title}</a>')
+            origin_attr = f' data-origin="{escape(link.origin, quote=True)}"' if link.origin else ''
+            cell_parts.append(f'<a href="{href}"{track_id_attr}{origin_attr}>{display_title}</a>')
         else:
             cell_parts.append(display_title)
-
-        if link.origin:
-            cell_parts.append(f'<div class="song-origin"><em>{link.origin}</em></div>')
 
         rows.append(f"            <li>{''.join(cell_parts)}</li>")
 

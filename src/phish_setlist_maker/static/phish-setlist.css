@@ -97,28 +97,36 @@ ol {
 
 /* More left margin for set song lists */
 .sets-row ol {
-  padding-left: 1.75rem;
+  padding-left: 2rem;
 }
 
 @media (max-width: 768px) {
-  ul, ol {
+  ul {
     padding-left: 1rem;
     font-size: 0.95rem;
     line-height: 1.4;
   }
-  
-  /* More margin for sets on mobile too */
-  .sets-row ol {
-    padding-left: 1.5rem;
+
+  ol {
+    padding-left: 1rem;
+    font-size: 0.95rem;
+    line-height: 1.4;
   }
-  
-  ol li, ul li {
+
+  /* MUCH more margin for sets on mobile - easier to read on small screens */
+  .sets-row ol {
+    padding-left: 3.25rem;
+  }
+
+  ol li,
+  ul li {
     margin-bottom: 0.25rem;
     padding-left: 0.25rem;
   }
-  
+
   /* Better text wrapping on mobile */
-  ol li a, ul li a {
+  ol li a,
+  ul li a {
     display: inline-block;
     max-width: 100%;
   }
@@ -146,10 +154,7 @@ a[data-audio-url].active {
   font-weight: 600;
 }
 .song-origin {
-  display: block;
-  margin-top: 0.25rem;
-  font-size: 0.9em;
-  color: var(--muted);
+  display: none; /* Moved to tooltip */
 }
 
 /* Styles used by html_basic.py (tables) */
@@ -260,15 +265,15 @@ a[data-audio-url].active {
     justify-content: space-between;
     align-items: center;
   }
-  
+
   .context-card .toggle-icon {
     display: inline-block;
   }
-  
+
   .context-card.collapsed .toggle-icon {
     transform: rotate(-90deg);
   }
-  
+
   .context-card.collapsed .context-content {
     display: none;
   }
@@ -338,6 +343,19 @@ a[data-audio-url].active {
 @media (max-width: 600px) {
   .track-title {
     font-size: 1em;
+  }
+}
+
+.track-origin {
+  font-size: 0.85em;
+  color: var(--muted);
+  font-style: italic;
+  margin-top: 0.25rem;
+}
+
+@media (max-width: 600px) {
+  .track-origin {
+    font-size: 0.8em;
   }
 }
 
@@ -474,7 +492,7 @@ a[data-audio-url].active {
   .jamchart-note {
     background: rgba(255, 215, 0, 0.15);
   }
-  
+
   .tease {
     background: rgba(102, 208, 255, 0.15);
   }

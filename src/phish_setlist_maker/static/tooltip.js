@@ -58,7 +58,7 @@
   }
 
   // Render tooltip content
-  function renderTooltipContent(data) {
+  function renderTooltipContent(data, origin) {
     if (!data) {
       return '<div class="track-tooltip-error">Failed to load track info</div>';
     }
@@ -88,6 +88,7 @@
     const html = `
       <div class="track-tooltip-header">
         <div class="track-title">${title}</div>
+        ${origin ? `<div class="track-origin">${origin}</div>` : ''}
       </div>
       <div class="track-tooltip-body">
         <div class="track-show">
@@ -186,7 +187,8 @@
     const data = await fetchTrackData(trackId);
     if (currentLink === link) {
       // Only update if we're still hovering the same link
-      const content = renderTooltipContent(data);
+      const origin = link.dataset.origin || null;
+      const content = renderTooltipContent(data, origin);
       currentTooltip.innerHTML = `<div class="track-tooltip-content">${content}</div>`;
       positionTooltip(currentTooltip, link);
     }
@@ -250,7 +252,8 @@
     const data = await fetchTrackData(trackId);
     if (currentLink === link) {
       // Only update if we're still showing the same tooltip
-      const content = renderTooltipContent(data);
+      const origin = link.dataset.origin || null;
+      const content = renderTooltipContent(data, origin);
       currentTooltip.innerHTML = `<div class="track-tooltip-content">${content}</div>`;
       positionTooltip(currentTooltip, link);
     }
