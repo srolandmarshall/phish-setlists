@@ -31,7 +31,7 @@ STATIC_SCRIPT = "/static/player.js"
 app = FastAPI(
     title="Inphinite - The Phish Setlist Generator API",
     version="0.2.0",
-    description="Generate authentic Phish setlists with ML-enhanced song selection, weighted set closers, and intelligent frequency caps."
+    description="Generate authentic Phish setlists with ML-enhanced song selection, weighted set closers, and intelligent frequency caps.",
 )
 
 # CORS middleware for local development and production
@@ -40,7 +40,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "https://inphinite.sammarshall.us",
-        "https://inphinite-phront-end.fly.dev"
+        "https://inphinite-phront-end.fly.dev",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -58,7 +58,9 @@ def root() -> HTMLResponse:
     if index_path.exists():
         return HTMLResponse(content=index_path.read_text())
     # Fallback if static file missing
-    return HTMLResponse(content="<h1>Inphinite API</h1><p><a href='/docs'>API Docs</a></p>")
+    return HTMLResponse(
+        content="<h1>Inphinite API</h1><p><a href='/docs'>API Docs</a></p>"
+    )
 
 
 @app.get("/health", response_model=HealthResponse, tags=["status"])
@@ -85,9 +87,15 @@ def generate_html(
     include_encore: bool = Query(True),
     allow_previous_show: bool = Query(True),
     seed: Optional[int] = Query(None),
-    use_ml_features: bool = Query(True, description="Enable ML-driven feature adjustments"),
-    ml_placement_weight: float = Query(0.3, ge=0.0, le=1.0, description="Weight for ML placement probabilities"),
-    ml_transition_bonus: float = Query(0.1, ge=0.0, le=1.0, description="Bonus for ML transition lifts"),
+    use_ml_features: bool = Query(
+        True, description="Enable ML-driven feature adjustments"
+    ),
+    ml_placement_weight: float = Query(
+        0.3, ge=0.0, le=1.0, description="Weight for ML placement probabilities"
+    ),
+    ml_transition_bonus: float = Query(
+        0.1, ge=0.0, le=1.0, description="Bonus for ML transition lifts"
+    ),
     jamminess: Optional[float] = Query(
         default=None,
         ge=0.0,
@@ -153,8 +161,12 @@ def generate_endpoint(
     effective_include_html = payload.include_html or wants_html
     effective_include_playlist = payload.include_playlist or wants_html
 
-    stylesheet_href = STATIC_STYLESHEET if (effective_include_html and STATIC_AVAILABLE) else None
-    script_src = STATIC_SCRIPT if (effective_include_playlist and STATIC_AVAILABLE) else None
+    stylesheet_href = (
+        STATIC_STYLESHEET if (effective_include_html and STATIC_AVAILABLE) else None
+    )
+    script_src = (
+        STATIC_SCRIPT if (effective_include_playlist and STATIC_AVAILABLE) else None
+    )
 
     generation_request = build_generation_request(
         payload,
