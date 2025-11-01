@@ -51,6 +51,7 @@ def songdisplay_to_model(song: SongDisplay) -> SongModel:
         duration_seconds=song.duration_seconds,
         origin=song.origin,
         show_date=song.show_date,
+        track_id=song.track_id,
     )
 
 

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -32,6 +33,20 @@ app = FastAPI(
     version="0.2.0",
     description="Generate authentic Phish setlists with ML-enhanced song selection, weighted set closers, and intelligent frequency caps."
 )
+
+# CORS middleware for local development and production
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "https://inphinite.sammarshall.us",
+        "https://inphinite-phront-end.fly.dev"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 if STATIC_AVAILABLE:
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 

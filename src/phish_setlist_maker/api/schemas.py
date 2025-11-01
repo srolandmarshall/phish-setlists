@@ -18,6 +18,7 @@ class SongModel(BaseModel):
     duration_seconds: Optional[int] = None
     origin: Optional[str] = None
     show_date: Optional[str] = None
+    track_id: Optional[int] = None
 
 
 class SegmentModel(BaseModel):
