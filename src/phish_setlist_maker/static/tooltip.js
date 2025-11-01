@@ -161,37 +161,7 @@
 
   // Show tooltip
   async function showTooltip(link) {
-    const trackId = link.dataset.trackId;
-    if (!trackId) return;
-
-    // Clear any pending hide timeout
-    if (hideTimeout) {
-      clearTimeout(hideTimeout);
-      hideTimeout = null;
-    }
-
-    // Create tooltip if it doesn't exist
-    if (!currentTooltip) {
-      currentTooltip = createTooltip();
-    }
-
-    currentLink = link;
-
-    // Show loading state
-    currentTooltip.innerHTML =
-      '<div class="track-tooltip-content">Loading...</div>';
-    currentTooltip.classList.add('visible');
-    positionTooltip(currentTooltip, link);
-
-    // Fetch and render data
-    const data = await fetchTrackData(trackId);
-    if (currentLink === link) {
-      // Only update if we're still hovering the same link
-      const origin = link.dataset.origin || null;
-      const content = renderTooltipContent(data, origin);
-      currentTooltip.innerHTML = `<div class="track-tooltip-content">${content}</div>`;
-      positionTooltip(currentTooltip, link);
-    }
+    await showTooltipForLink(link);
   }
 
   // Hide tooltip with delay
@@ -214,19 +184,25 @@
     }, 200); // Small delay to allow moving to tooltip
   }
 
-  // Toggle tooltip (for click behavior)
+  // Toggle tooltip (for icon click)
   async function toggleTooltip(link, event) {
-    event.preventDefault();
-    event.stopPropagation();
-    
     const trackId = link.dataset.trackId;
     if (!trackId) return;
 
-    // If clicking the same link, toggle off
+    // If tooltip already open for this link, close it
     if (isTooltipOpen && currentLink === link) {
       hideTooltip(true);
       return;
     }
+
+    // Show tooltip
+    showTooltipForLink(link);
+  }
+  
+  // Show tooltip for a link
+  async function showTooltipForLink(link) {
+    const trackId = link.dataset.trackId;
+    if (!trackId) return;
 
     // Clear any pending hide timeout
     if (hideTimeout) {
@@ -280,30 +256,35 @@
     const links = document.querySelectorAll('a[data-track-id]');
 
     links.forEach((link) => {
-      // Click handler for both desktop and mobile
-      // This must be added with capture=true to run before player.js handler
-      link.addEventListener('click', (event) => {
-        // Always toggle tooltip, never play audio on first click
-        toggleTooltip(link, event);
-      }, true); // USE CAPTURE PHASE - runs before player.js
+      const titleText = link.querySelector('.track-title-text');
+      const infoIcon = link.querySelector('.track-info-icon');
+      
+      if (!titleText || !infoIcon) return;
 
-      // Desktop hover behavior (only if not touch device)
+      // Icon click - show tooltip, prevent song play
+      infoIcon.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleTooltip(link, event);
+      }, true);
+
+      // Text click - allow normal behavior (play song)
+      // Do nothing special, let player.js handle it
+
+      // Desktop hover behavior on text (only if not touch device)
       if (!isTouchDevice) {
-        link.addEventListener('mouseenter', () => {
+        titleText.addEventListener('mouseenter', () => {
           if (!isTooltipOpen) {
             showTooltip(link);
           }
         });
 
-        link.addEventListener('mouseleave', () => {
+        titleText.addEventListener('mouseleave', () => {
           if (!isTooltipOpen) {
             hideTooltip();
           }
         });
       }
-
-      // Add a visual indicator that this link has a tooltip
-      link.classList.add('has-tooltip');
     });
 
     setupTooltipHover();

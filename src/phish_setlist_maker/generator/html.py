@@ -67,14 +67,23 @@ def _render_section(section: PlaylistSection, include_links: bool) -> str:
             href = escape(link.mp3_url, quote=True)
             track_id_attr = f' data-track-id="{link.track_id}"' if link.track_id else ''
             origin_attr = f' data-origin="{escape(link.origin, quote=True)}"' if link.origin else ''
+            # Wrap in span with class for separate icon/text handling
             cell_parts.append(
-                f'<a href="#" data-audio-url="{href}"{track_id_attr}{origin_attr}>{display_title}</a>'
+                f'<a href="#" data-audio-url="{href}"{track_id_attr}{origin_attr} class="track-link">'
+                f'<span class="track-title-text">{display_title}</span>'
+                f'<span class="track-info-icon">ℹ️</span>'
+                f'</a>'
             )
         elif link.mp3_url and not include_links:
             href = escape(link.mp3_url, quote=True)
             track_id_attr = f' data-track-id="{link.track_id}"' if link.track_id else ''
             origin_attr = f' data-origin="{escape(link.origin, quote=True)}"' if link.origin else ''
-            cell_parts.append(f'<a href="{href}"{track_id_attr}{origin_attr}>{display_title}</a>')
+            cell_parts.append(
+                f'<a href="{href}"{track_id_attr}{origin_attr} class="track-link">'
+                f'<span class="track-title-text">{display_title}</span>'
+                f'<span class="track-info-icon">ℹ️</span>'
+                f'</a>'
+            )
         else:
             cell_parts.append(display_title)
 

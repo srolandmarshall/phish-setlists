@@ -467,23 +467,30 @@ a[data-audio-url].active {
   font-size: 0.9em;
 }
 
-.has-tooltip {
+/* Track link structure */
+.track-link {
+  display: inline;
   position: relative;
-  cursor: pointer;
+  text-decoration: none;
+}
+
+.track-title-text {
   text-decoration: underline;
   text-decoration-style: dotted;
   text-underline-offset: 2px;
+  cursor: pointer;
 }
 
-.has-tooltip::after {
-  content: " ℹ️";
+.track-info-icon {
   font-size: 1em;
   opacity: 0.6;
   margin-left: 0.25em;
+  cursor: pointer;
+  display: inline-block;
 }
 
 @media (max-width: 600px) {
-  .has-tooltip::after {
+  .track-info-icon {
     font-size: 0.95em;
   }
 }
