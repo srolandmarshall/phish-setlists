@@ -12,7 +12,8 @@
   let currentTooltip = null;
   let currentLink = null;
   let hideTimeout = null;
-  let isTooltipOpen = false;
+  let isTooltipOpen = false; // Pinned by icon click
+  let isHovering = false; // Currently hovering
   
   // Detect if we're on a touch device
   const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
@@ -172,15 +173,18 @@
       }
       currentLink = null;
       isTooltipOpen = false;
+      isHovering = false;
       return;
     }
     
     hideTimeout = setTimeout(() => {
-      if (currentTooltip) {
-        currentTooltip.classList.remove('visible');
+      // Only hide if not hovering and not pinned
+      if (!isHovering && !isTooltipOpen) {
+        if (currentTooltip) {
+          currentTooltip.classList.remove('visible');
+        }
+        currentLink = null;
       }
-      currentLink = null;
-      isTooltipOpen = false;
     }, 200); // Small delay to allow moving to tooltip
   }
 
@@ -195,12 +199,12 @@
       return;
     }
 
-    // Show tooltip
-    showTooltipForLink(link);
+    // Show tooltip and pin it
+    await showTooltipForLink(link, true); // true = pin it
   }
   
   // Show tooltip for a link
-  async function showTooltipForLink(link) {
+  async function showTooltipForLink(link, pin = false) {
     const trackId = link.dataset.trackId;
     if (!trackId) return;
 
@@ -213,10 +217,13 @@
     // Create tooltip if it doesn't exist
     if (!currentTooltip) {
       currentTooltip = createTooltip();
+      setupTooltipHover(); // Set up hover handlers on the tooltip itself
     }
 
     currentLink = link;
-    isTooltipOpen = true;
+    if (pin) {
+      isTooltipOpen = true; // Only set if pinning via icon click
+    }
 
     // Show loading state
     currentTooltip.innerHTML =
@@ -239,6 +246,7 @@
   function setupTooltipHover() {
     if (currentTooltip) {
       currentTooltip.addEventListener('mouseenter', () => {
+        isHovering = true;
         if (hideTimeout) {
           clearTimeout(hideTimeout);
           hideTimeout = null;
@@ -246,7 +254,10 @@
       });
 
       currentTooltip.addEventListener('mouseleave', () => {
-        hideTooltip();
+        isHovering = false;
+        if (!isTooltipOpen) {
+          hideTooltip();
+        }
       });
     }
   }
@@ -274,20 +285,20 @@
       // Desktop hover behavior on text (only if not touch device)
       if (!isTouchDevice) {
         titleText.addEventListener('mouseenter', () => {
+          isHovering = true;
           if (!isTooltipOpen) {
             showTooltip(link);
           }
         });
 
         titleText.addEventListener('mouseleave', () => {
+          isHovering = false;
           if (!isTooltipOpen) {
             hideTooltip();
           }
         });
       }
     });
-
-    setupTooltipHover();
     
     // Close tooltip when clicking outside
     document.addEventListener('click', (event) => {
