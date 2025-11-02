@@ -18,3 +18,5 @@ __pycache__/
 
 AGENTS*.md
 *-SUMMARY*.md
+
+.vscode/
