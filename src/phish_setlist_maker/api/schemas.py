@@ -12,6 +12,19 @@ class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
 
 
+class VenueModel(BaseModel):
+    id: int
+    name: str
+    city: str
+    state: str
+    country: str
+    slug: str
+    shows_count: int
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    abbrev: Optional[str] = None
+
+
 class SongModel(BaseModel):
     title: str
     mp3_url: Optional[str] = None
@@ -107,4 +120,5 @@ __all__ = [
     "PlaylistSectionModel",
     "SegmentModel",
     "SongModel",
+    "VenueModel",
 ]
