@@ -49,14 +49,6 @@ class PlaylistArtifacts:
 
 
 @dataclass(slots=True)
-class HTMLArtifact:
-    """Rendered HTML markup plus reference to the stylesheet."""
-
-    markup: str
-    stylesheet: str = "phish-setlist.css"
-
-
-@dataclass(slots=True)
 class GenerationResult:
     """Full output of the generator, including optional media artifacts."""
 
@@ -66,4 +58,3 @@ class GenerationResult:
     segments: List[SegmentDetails]
     encore: Optional[SegmentDetails]
     playlist: Optional[PlaylistArtifacts]
-    html: Optional[HTMLArtifact]

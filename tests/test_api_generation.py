@@ -1,4 +1,4 @@
-"""Smoke tests for the FastAPI negotiation logic."""
+"""Smoke tests for the FastAPI generation endpoint."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from phish_setlist_maker.generator.core import GenerationMetadata, GeneratedSetl
 from phish_setlist_maker.service import (
     GenerationRequest,
     GenerationResult,
-    HTMLArtifact,
     SegmentDetails,
     SongDisplay,
 )
@@ -39,7 +38,7 @@ def api_client(db_session) -> TestClient:
         client.close()
 
 
-def _fake_generation_result(include_html: bool) -> GenerationResult:
+def _fake_generation_result() -> GenerationResult:
     metadata = GenerationMetadata(
         reference_date=date(2024, 1, 1),
         cutoff_date=date(2024, 1, 1),
@@ -60,7 +59,6 @@ def _fake_generation_result(include_html: bool) -> GenerationResult:
             duration_seconds=None,
         )
     ]
-    html_artifact = HTMLArtifact(markup="<html>maze</html>", stylesheet="phish-setlist.css") if include_html else None
     return GenerationResult(
         seed=99,
         generated_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -68,17 +66,16 @@ def _fake_generation_result(include_html: bool) -> GenerationResult:
         segments=segments,
         encore=None,
         playlist=None,
-        html=html_artifact,
     )
 
 
-def test_post_generate_defaults_to_json(api_client: TestClient, mocker: MockerFixture) -> None:
+def test_post_generate_returns_json(api_client: TestClient, mocker: MockerFixture) -> None:
     mock_generate = mocker.patch(
         "phish_setlist_maker.api.generate_show",
-        return_value=_fake_generation_result(include_html=False),
+        return_value=_fake_generation_result(),
     )
 
-    response = api_client.post("/generate", json={"include_playlist": False, "include_html": False})
+    response = api_client.post("/generate", json={"include_playlist": False})
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
@@ -86,38 +83,17 @@ def test_post_generate_defaults_to_json(api_client: TestClient, mocker: MockerFi
     assert payload["seed"] == 99
     mock_request: GenerationRequest = mock_generate.call_args.args[1]
     assert mock_request.include_playlist is False
-    assert mock_request.include_html is False
 
 
-def test_post_generate_negotiates_html(api_client: TestClient, mocker: MockerFixture) -> None:
+def test_post_generate_forwards_jamminess(api_client: TestClient, mocker: MockerFixture) -> None:
     mock_generate = mocker.patch(
         "phish_setlist_maker.api.generate_show",
-        return_value=_fake_generation_result(include_html=True),
+        return_value=_fake_generation_result(),
     )
 
-    response = api_client.post(
-        "/generate",
-        json={"include_playlist": False, "include_html": False},
-        headers={"Accept": "text/html"},
-    )
+    response = api_client.post("/generate", json={"jamminess": 0.42})
 
     assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/html")
-    assert "<html>maze</html>" in response.text
-    mock_request: GenerationRequest = mock_generate.call_args.args[1]
-    assert mock_request.include_playlist is True
-    assert mock_request.include_html is True
-
-
-def test_get_generate_forwards_jamminess(api_client: TestClient, mocker: MockerFixture) -> None:
-    mock_generate = mocker.patch(
-        "phish_setlist_maker.api.generate_show",
-        return_value=_fake_generation_result(include_html=True),
-    )
-
-    response = api_client.get("/generate?jamminess=0.42")
-
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["content-type"].startswith("application/json")
     mock_request: GenerationRequest = mock_generate.call_args.args[1]
     assert mock_request.jamminess == pytest.approx(0.42)

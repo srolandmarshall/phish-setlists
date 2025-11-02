@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 from ..constants import ERA_DEFINITIONS
 from ..generator import GeneratedSetlist, SetlistGenerator, random_set_lengths
 from ..generator.core import GenerationMetadata, SetSegment
-from ..generator.html import build_html_markup
 from ..models import Show, SongTrack, Track, Venue
 from .catalog import (
     SongCatalog,
@@ -25,8 +24,7 @@ from .catalog import (
     split_song_titles,
 )
 from .errors import PlaylistServiceError
-from .playlist import build_playlist_sections
-from .models import GenerationResult, HTMLArtifact, PlaylistArtifacts, SegmentDetails, SongDisplay
+from .models import GenerationResult, PlaylistArtifacts, SegmentDetails, SongDisplay
 from .tracks import CandidateTrack, query_tracks_for_song, resolve_track_metadata
 from .segments import expand_tracks, segment_duration_seconds
 
@@ -93,11 +91,8 @@ class GenerationRequest:
     allow_previous_show: bool = True
     seed: Optional[int] = None
     include_playlist: bool = False
-    include_html: bool = False
     prefetch_track_metadata: bool = True
     fail_on_playlist_error: bool = False
-    html_stylesheet_href: Optional[str] = None
-    html_script_src: Optional[str] = None
     use_ml_features: bool = True
     ml_placement_weight: float = 0.3
     ml_transition_bonus: float = 0.1
@@ -388,14 +383,8 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
 
     generated_at = datetime.now(timezone.utc)
 
-    needs_playlist = (
-        request.include_playlist
-        or request.include_html
-        or request.prefetch_track_metadata
-    )
-
     playlist_artifacts: Optional[PlaylistArtifacts] = None
-    if needs_playlist:
+    if request.include_playlist or request.prefetch_track_metadata:
         catalog = build_song_catalog(session)
         playlist_artifacts = prepare_playlist_artifacts(
             session,
@@ -440,35 +429,6 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
             if note not in metadata.notes:
                 metadata.notes.append(note)
 
-    html_artifact: Optional[HTMLArtifact] = None
-    if request.include_html:
-        include_audio_links = bool(request.include_playlist and playlist_artifacts)
-        sections_for_html = build_playlist_sections(
-            segments_details,
-            encore_details,
-            include_audio_links=include_audio_links,
-        )
-
-        playlist_filename = "playlist.m3u" if include_audio_links else None
-        first_track_url = (
-            playlist_artifacts.first_track_url if include_audio_links and playlist_artifacts else None
-        )
-        stylesheet_href = request.html_stylesheet_href or "phish-setlist.css"
-        script_src = request.html_script_src if include_audio_links else None
-
-        html_markup = build_html_markup(
-            generated,
-            generated_at,
-            playlist_filename=playlist_filename,
-            first_track_url=first_track_url,
-            playlist_sections=sections_for_html,
-            stylesheet_href=stylesheet_href,
-            script_src=script_src,
-            venue_name=venue_name,
-            venue_city=venue_city,
-        )
-        html_artifact = HTMLArtifact(markup=html_markup, stylesheet=stylesheet_href)
-
     return GenerationResult(
         seed=seed,
         generated_at=generated_at,
@@ -476,5 +436,4 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
         segments=segments_details,
         encore=encore_details,
         playlist=playlist_artifacts,
-        html=html_artifact,
     )

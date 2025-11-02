@@ -41,11 +41,10 @@ def _fake_cli_result() -> GenerationResult:
         segments=segments,
         encore=None,
         playlist=None,
-        html=None,
     )
 
 
-def test_cli_html_invocation(tmp_path, db_session, mocker: MockerFixture, monkeypatch, capsys) -> None:
+def test_cli_markdown_invocation(tmp_path, db_session, mocker: MockerFixture, monkeypatch, capsys) -> None:
     script_path = Path(__file__).resolve().parents[1] / "scripts" / "generate_setlist.py"
     spec = importlib.util.spec_from_file_location("generate_setlist", script_path)
     assert spec is not None
@@ -63,17 +62,15 @@ def test_cli_html_invocation(tmp_path, db_session, mocker: MockerFixture, monkey
     monkeypatch.setattr(cli, "session_scope", fake_session_scope)
 
     mocker.patch.object(cli, "generate_show", return_value=_fake_cli_result())
-    render_html_spy = mocker.patch.object(cli, "render_html_report")
     render_markdown_spy = mocker.patch.object(cli, "render_markdown")
 
-    monkeypatch.setattr(cli.sys, "argv", [str(tmp_path / "scripts" / "generate_setlist.py"), "--html"])
+    monkeypatch.setattr(cli.sys, "argv", [str(tmp_path / "scripts" / "generate_setlist.py")])
 
     cli.main()
 
     captured = capsys.readouterr()
     assert "Wrote setlist to" in captured.out
-    assert render_html_spy.called
-    assert not render_markdown_spy.called
-    output_path_arg = render_html_spy.call_args.kwargs.get("output_path")
+    assert render_markdown_spy.called
+    output_path_arg = render_markdown_spy.call_args.args[0]
     assert output_path_arg is not None
     assert Path(output_path_arg).parent == tmp_path / "data"

@@ -16,13 +16,11 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from phish_setlist_maker.db import session_scope  # noqa: E402
-from phish_setlist_maker.generator.html_basic import render_html_report  # noqa: E402
 from phish_setlist_maker.service import (  # noqa: E402
     GenerationRequest,
     SongDisplay,
     generate_show,
 )
-from phish_setlist_maker.service.playlist import build_playlist_sections  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -74,11 +72,6 @@ def parse_args() -> argparse.Namespace:
         dest="allow_previous_show",
         action="store_false",
         help="Exclude songs from the previous show.",
-    )
-    parser.add_argument(
-        "--html",
-        action="store_true",
-        help="Render output as HTML instead of Markdown.",
     )
     parser.add_argument(
         "--playlist",
@@ -227,7 +220,6 @@ def main() -> None:
         allow_previous_show=allow_previous_show,
         seed=args.seed,
         include_playlist=args.playlist,
-        include_html=False,
         prefetch_track_metadata=True,
         fail_on_playlist_error=False,
         jamminess=args.jamminess,
@@ -240,14 +232,11 @@ def main() -> None:
     now_utc = result.generated_at
     timestamp = now_utc.strftime("%Y%m%d_%H%M%S")
     output_dir = PROJECT_ROOT / "data"
-    extension = "html" if args.html else "md"
-    output_path = output_dir / f"setlist_{timestamp}.{extension}"
+    output_path = output_dir / f"setlist_{timestamp}.md"
 
     playlist_sections_data: List[Tuple[str, List[SongDisplay]]]
-    first_track_url: Optional[str] = None
     if result.playlist:
         playlist_sections_data = result.playlist.sections
-        first_track_url = result.playlist.first_track_url
     else:
         playlist_sections_data = [
             (segment.label, segment.tracks) for segment in result.segments
@@ -261,32 +250,7 @@ def main() -> None:
         playlist_path = output_dir / f"playlist_{timestamp}.m3u"
         playlist_path.write_text(result.playlist.m3u_text, encoding="utf-8")
 
-    def render_html_output(path: Path, include_playlist: bool) -> None:
-        playlist_file = playlist_path if include_playlist else None
-        track_url = first_track_url if include_playlist else None
-
-        sections = build_playlist_sections(
-            result.segments,
-            result.encore,
-            include_audio_links=include_playlist,
-        )
-        render_html_report(
-            output_path=path,
-            generated=generated,
-            generated_at=now_utc,
-            playlist_path=playlist_file,
-            first_track_url=track_url,
-            playlist_sections=sections,
-        )
-
-    if args.playlist:
-        render_markdown(output_path, generated, now_utc, sections=playlist_sections_data)
-        html_output = output_path.with_suffix(".html")
-        render_html_output(html_output, include_playlist=True)
-    elif args.html:
-        render_html_output(output_path, include_playlist=False)
-    else:
-        render_markdown(output_path, generated, now_utc, sections=playlist_sections_data)
+    render_markdown(output_path, generated, now_utc, sections=playlist_sections_data)
 
     message = f"Wrote setlist to {output_path} (seed={result.seed})"
     if playlist_path:

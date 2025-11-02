@@ -8,7 +8,6 @@ from ..generator.core import GenerationMetadata
 from ..service import GenerationResult, PlaylistArtifacts, SegmentDetails, SongDisplay
 from .schemas import (
     GenerateResponse,
-    HTMLModel,
     MetadataModel,
     PlaylistModel,
     PlaylistSectionModel,
@@ -76,9 +75,6 @@ def result_to_response(result: GenerationResult) -> GenerateResponse:
     encore = segment_to_model(result.encore) if result.encore else None
 
     playlist = playlist_to_model(result.playlist) if result.playlist else None
-    html = None
-    if result.html:
-        html = HTMLModel(markup=result.html.markup, stylesheet=result.html.stylesheet)
 
     return GenerateResponse(
         seed=result.seed,
@@ -87,7 +83,6 @@ def result_to_response(result: GenerationResult) -> GenerateResponse:
         sets=sets,
         encore=encore,
         playlist=playlist,
-        html=html,
     )
 
 

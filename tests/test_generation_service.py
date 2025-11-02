@@ -53,7 +53,6 @@ def test_generate_show_allows_previous_show_for_past_year(
         allow_previous_show=False,
         seed=42,
         include_playlist=False,
-        include_html=False,
         prefetch_track_metadata=False,
     )
 
@@ -62,7 +61,6 @@ def test_generate_show_allows_previous_show_for_past_year(
     # Seed should be the explicit request seed.
     assert result.seed == 42
     assert result.playlist is None
-    assert result.html is None
 
     kwargs = generator_instance.generate.call_args.kwargs
     assert kwargs["exclude_previous_show"] is False
@@ -164,7 +162,6 @@ def test_generate_show_populates_playlist_with_remote_fallback(
             allow_previous_show=True,
             seed=7,
             include_playlist=True,
-            include_html=False,
             prefetch_track_metadata=True,
         )
 
@@ -174,7 +171,6 @@ def test_generate_show_populates_playlist_with_remote_fallback(
     assert result.playlist.first_track_url == fallback_url
     assert result.playlist.missing_tracks == []
     assert result.playlist.m3u_text is not None
-    assert "playlist.m3u" not in (result.html.markup if result.html else "")
 
     sections = dict(result.playlist.sections)
     assert "Set 1" in sections
@@ -224,7 +220,6 @@ def test_generate_show_duration_notes_use_actual_times(
         allow_previous_show=True,
         seed=5,
         include_playlist=False,
-        include_html=False,
         prefetch_track_metadata=False,
     )
 
