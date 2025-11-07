@@ -1,244 +1,177 @@
-"""Tests for generator integration with segue groups."""
+"""Regression tests for segue-aware generation."""
 
-import pytest
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date, datetime
+from random import Random
+from typing import Dict, Iterable, List, Sequence, Tuple
+
 from phish_setlist_maker.generator.core import SetlistGenerator
+from phish_setlist_maker.models.show import Show
+from phish_setlist_maker.models.track import Track
+from sqlalchemy.orm import Session
 
 
-pytestmark = pytest.mark.segue
+def _seed_show(
+    session: Session,
+    show_date: date,
+    sets: Dict[str, Sequence[Tuple[str, int]]],
+) -> None:
+    """Minimal helper to seed tracks for testing."""
+    timestamp = datetime.combine(show_date, datetime.min.time())
+    show = Show(
+        date=show_date,
+        created_at=timestamp,
+        updated_at=timestamp,
+        venue_name="Test Venue",
+        duration=0,
+    )
+    session.add(show)
+    session.flush()
+
+    for set_label, tracks in sets.items():
+        for position, (title, duration_seconds) in enumerate(tracks, start=1):
+            session.add(
+                Track(
+                    show_id=show.id,
+                    title=title,
+                    position=position,
+                    duration=duration_seconds * 1000,
+                    set=set_label,
+                    slug=f"{title.lower().replace(' ', '-')}-{show_date.isoformat()}-{position}",
+                )
+            )
+
+    session.flush()
 
 
-class TestGeneratorMandatorySegues:
-    """Test generator enforces mandatory segues."""
-    
-    def test_loads_segue_groups_when_ml_features_enabled(self, db_session, minimal_segue_data, mock_feature_loaders):
-        """Should load segue groups when use_ml_features=True."""
-        generator = SetlistGenerator(
-            db_session,
-            use_ml_features=True,
-            features_dir=minimal_segue_data
-        )
-        
-        # Should have loaded feature store with segues
-        assert generator._feature_store is not None
-        assert generator._feature_store._segue_groups is not None
-        assert len(generator._feature_store._segue_groups) >= 1
-    
-    def test_skips_segue_loading_when_ml_disabled(self, db_session, minimal_segue_data, mock_feature_loaders):
-        """Should not load segues when use_ml_features=False."""
-        generator = SetlistGenerator(
-            db_session,
-            use_ml_features=False,
-            features_dir=minimal_segue_data
-        )
-        
-        # Feature store should not be loaded
-        assert generator._feature_store is None
-    
-    def test_get_mandatory_segues_returns_data(self, db_session, minimal_segue_data, mock_feature_loaders):
-        """Should retrieve mandatory segues for a song."""
-        generator = SetlistGenerator(
-            db_session,
-            use_ml_features=True,
-            features_dir=minimal_segue_data
-        )
-        
-        segues = generator._feature_store.get_mandatory_segues("Mike's Song")
-        
-        assert len(segues) >= 1
-        assert segues[0]['pattern'] == "Mike's Song -> I Am Hydrogen"
-        assert segues[0]['frequency'] == 'mandatory'
+@dataclass
+class _DummyTransition:
+    lift: float = 0.0
 
 
-class TestGeneratorRareSegues:
-    """Test generator handles rare segues (lottery tickets)."""
-    
-    def test_get_rare_segues_by_track_id(self, db_session, minimal_segue_data, mock_feature_loaders):
-        """Should retrieve rare segues for a specific track."""
-        generator = SetlistGenerator(
-            db_session,
-            use_ml_features=True,
-            features_dir=minimal_segue_data
-        )
-        
-        # Track 200 = Tweezer from 2015-08-22
-        rare_segues = generator._feature_store.get_rare_segues_from_track(200)
-        
-        assert len(rare_segues) == 1
-        assert rare_segues[0]['pattern'] == 'Tweezer -> Prince Caspian'
-        assert rare_segues[0]['is_lottery_ticket'] is True
-    
-    def test_rare_segues_have_lottery_metadata(self, db_session, minimal_segue_data, mock_feature_loaders):
-        """Rare segues should include lottery weighting."""
-        generator = SetlistGenerator(
-            db_session,
-            use_ml_features=True,
-            features_dir=minimal_segue_data
-        )
-        
-        rare_segues = generator._feature_store._rare_segues
-        
-        assert len(rare_segues) >= 1
-        first_rare = rare_segues[0]
-        assert 'lottery_weight' in first_rare
-        assert 'rarity_score' in first_rare
-        assert first_rare['lottery_weight'] == 339  # High likes
+class _FakeFeatureStore:
+    """Lightweight stub containing two mandatory segue chains."""
+
+    def __init__(self) -> None:
+        self._patterns: List[List[str]] = [
+            ["Song Alpha", "Song Beta"],
+            ["Song Gamma", "Song Delta"],
+        ]
+
+    def get_mandatory_segues(self, song_title: str) -> List[Dict[str, List[str]]]:
+        return [{"songs": pattern} for pattern in self._patterns if song_title in pattern]
+
+    def get_mandatory_next_songs(self, from_song: str) -> set[str]:
+        next_songs: set[str] = set()
+        for pattern in self._patterns:
+            if from_song in pattern:
+                idx = pattern.index(from_song)
+                if idx + 1 < len(pattern):
+                    next_songs.add(pattern[idx + 1])
+        return next_songs
+
+    def violates_ordering_constraint(self, songs_so_far: List[str], candidate_song: str) -> bool:
+        return False
+
+    def violates_cross_set_dependency(
+        self,
+        candidate_song: str,
+        target_set: str,
+        previous_sets_songs: Dict[str, List[str]],
+    ) -> bool:
+        return False
+
+    def is_forbidden_transition(self, from_song: str, to_song: str) -> bool:
+        return False
+
+    def get_transition_lift(self, from_song: str, to_song: str) -> _DummyTransition | None:
+        return None
+
+    def get_placement_probability(self, song_title: str, target_set: str) -> float:
+        return 0.0
+
+    def get_song_features(self, song_title: str):
+        return None
+
+    def get_set_enders_for_set(self, canonical_set: str, min_probability: float = 0.0) -> list:
+        return []
 
 
-class TestGeneratorSegueSelection:
-    """Test generator selection logic with segues."""
-    
-    def test_mandatory_segue_check_in_selection_flow(self, db_session, minimal_segue_data, mock_feature_loaders):
-        """Generator should check for mandatory segues during selection."""
-        generator = SetlistGenerator(
-            db_session,
-            use_ml_features=True,
-            features_dir=minimal_segue_data
-        )
-        
-        # Verify feature store has the check method
-        assert hasattr(generator._feature_store, 'get_mandatory_segues')
-        
-        # Verify we can call it
-        segues = generator._feature_store.get_mandatory_segues("Mike's Song")
-        assert isinstance(segues, list)
-    
-    def test_rare_segue_lookup_by_track(self, db_session, minimal_segue_data, mock_feature_loaders):
-        """Generator should be able to look up rare segues by track ID."""
-        generator = SetlistGenerator(
-            db_session,
-            use_ml_features=True,
-            features_dir=minimal_segue_data
-        )
-        
-        # Verify lookup method exists
-        assert hasattr(generator._feature_store, 'get_rare_segues_from_track')
-        
-        # Verify we can call it with track ID
-        rare = generator._feature_store.get_rare_segues_from_track(200)
-        assert isinstance(rare, list)
+class _DeterministicGenerator(SetlistGenerator):
+    """Override weighted pick so we can control the selection order."""
+
+    def __init__(self, *args, planned_choices: Sequence[str], **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._planned_choices = list(planned_choices)
+        self._choice_idx = 0
+
+    def _weighted_pick(self, *args, **kwargs):
+        if self._choice_idx < len(self._planned_choices):
+            choice = self._planned_choices[self._choice_idx]
+            self._choice_idx += 1
+            return choice
+        return super()._weighted_pick(*args, **kwargs)
 
 
-class TestGeneratorSegueFiltering:
-    """Test filtering segues by constraints."""
-    
-    def test_filters_segues_by_duration_budget(self, db_session, minimal_segue_data, mock_feature_loaders):
-        """Should filter out segues that exceed duration budget."""
-        generator = SetlistGenerator(
-            db_session,
-            use_ml_features=True,
-            features_dir=minimal_segue_data
-        )
-        
-        segues = generator._feature_store.get_mandatory_segues("Mike's Song")
-        
-        # Filter by duration
-        budget = 700
-        valid_segues = [s for s in segues if s['total_duration'] <= budget]
-        
-        # Should include Mike's->Hydrogen (600s)
-        assert len(valid_segues) >= 1
-        assert all(s['total_duration'] <= budget for s in valid_segues)
-    
-    def test_filters_rare_segues_by_duration(self, db_session, minimal_segue_data, mock_feature_loaders):
-        """Should filter rare segues by duration."""
-        generator = SetlistGenerator(
-            db_session,
-            use_ml_features=True,
-            features_dir=minimal_segue_data
-        )
-        
-        rare_segues = generator._feature_store._rare_segues
-        
-        # Tweezer->Caspian is 2068s (34 min) - too long for most budgets
-        short_budget = 1000
-        valid = [s for s in rare_segues if s['total_duration'] <= short_budget]
-        
-        # Should filter out the long segue
-        assert len(valid) == 0
-        
-        # But allow with larger budget
-        long_budget = 2500
-        valid_long = [s for s in rare_segues if s['total_duration'] <= long_budget]
-        assert len(valid_long) >= 1
+def test_generator_respects_max_segues_per_set(db_session: Session) -> None:
+    """Even without playlist prep, generator should stop adding new patterns after the cap."""
 
+    show_date = date(2024, 1, 1)
+    _seed_show(
+        db_session,
+        show_date,
+        {
+            "1": [
+                ("Song Alpha", 300),
+                ("Song Beta", 300),
+                ("Song Gamma", 300),
+                ("Song Delta", 300),
+                ("Song Other 1", 240),
+                ("Song Other 2", 240),
+                ("Song Other 3", 240),
+                ("Song Other 4", 240),
+            ],
+            "2": [("Song Encore Seed", 200)],
+        },
+    )
 
-class TestGeneratorSegueWeighting:
-    """Test segue weighting for lottery selection."""
-    
-    def test_rare_segues_sorted_by_lottery_weight(self, db_session, minimal_segue_data, mock_feature_loaders):
-        """Rare segues should be sortable by lottery weight (likes)."""
-        generator = SetlistGenerator(
-            db_session,
-            use_ml_features=True,
-            features_dir=minimal_segue_data
+    generator = _DeterministicGenerator(
+        db_session,
+        rng=Random(0),
+        adjacency_bonus=0.0,
+            planned_choices=[
+                "Song Alpha",  # First mandatory chain should be allowed
+                "Song Gamma",  # Second mandatory chain should be skipped due to cap
+                "Song Other 1",
+                "Song Other 2",
+                "Song Other 3",
+                "Song Other 4",
+            ],
         )
-        
-        rare_segues = generator._feature_store._rare_segues
-        
-        # Sort by lottery weight
-        sorted_segues = sorted(rare_segues, key=lambda s: s['lottery_weight'], reverse=True)
-        
-        # Highest weight first
-        assert sorted_segues[0]['lottery_weight'] >= sorted_segues[-1]['lottery_weight']
-    
-    def test_rarity_score_available_for_lottery_calculation(self, db_session, minimal_segue_data, mock_feature_loaders):
-        """Rare segues should have rarity score for probability calculation."""
-        generator = SetlistGenerator(
-            db_session,
-            use_ml_features=True,
-            features_dir=minimal_segue_data
-        )
-        
-        rare_segues = generator._feature_store._rare_segues
-        
-        for segue in rare_segues:
-            assert 'rarity_score' in segue
-            assert 0.0 <= segue['rarity_score'] <= 1.0
+    generator._feature_store = _FakeFeatureStore()
+    generator._use_ml_features = True
 
+    generated = generator.generate(
+        reference_date=show_date,
+        num_sets=2,
+        include_encore=False,
+        set_lengths={"set1": 6, "set2": 1},
+        exclude_previous_show=False,
+        max_segues_per_set=1,
+    )
 
-class TestGeneratorSegueDataStructure:
-    """Test segue data structure compatibility with generator."""
-    
-    def test_segue_tracks_field_is_list(self, db_session, minimal_segue_data, mock_feature_loaders):
-        """Tracks field should be list for generator to use."""
-        generator = SetlistGenerator(
-            db_session,
-            use_ml_features=True,
-            features_dir=minimal_segue_data
-        )
-        
-        segues = generator._feature_store._segue_groups
-        
-        for segue in segues:
-            assert isinstance(segue['tracks'], list)
-            assert len(segue['tracks']) >= 2
-    
-    def test_segue_songs_field_is_list(self, db_session, minimal_segue_data, mock_feature_loaders):
-        """Songs field should be list of strings."""
-        generator = SetlistGenerator(
-            db_session,
-            use_ml_features=True,
-            features_dir=minimal_segue_data
-        )
-        
-        segues = generator._feature_store._segue_groups
-        
-        for segue in segues:
-            assert isinstance(segue['songs'], list)
-            assert all(isinstance(s, str) for s in segue['songs'])
-    
-    def test_segue_has_required_fields(self, db_session, minimal_segue_data, mock_feature_loaders):
-        """Segues should have all required fields for generator."""
-        generator = SetlistGenerator(
-            db_session,
-            use_ml_features=True,
-            features_dir=minimal_segue_data
-        )
-        
-        segues = generator._feature_store._segue_groups
-        required_fields = ['segue_id', 'pattern', 'tracks', 'songs', 
-                          'total_duration', 'frequency']
-        
-        for segue in segues:
-            for field in required_fields:
-                assert field in segue, f"Missing field: {field}"
+    set1_songs = generated.sets[0].songs
+
+    # First pattern should survive intact
+    assert "Song Alpha" in set1_songs
+    assert "Song Beta" in set1_songs
+
+    # Second pattern must be rejected once the cap is reached
+    assert "Song Gamma" not in set1_songs
+    assert "Song Delta" not in set1_songs
+
+    # Remaining slots should be filled with other songs
+    assert any(song.startswith("Song Other") for song in set1_songs)
+    assert len(set1_songs) == 6

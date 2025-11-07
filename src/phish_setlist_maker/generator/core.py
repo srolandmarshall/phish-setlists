@@ -109,6 +109,7 @@ class SetlistGenerator:
         
         # Era context for generation (set during generate() call)
         self._current_era: Optional[str] = None
+        self._segment_segue_counts: Dict[str, int] = {}
 
     def _load_excluded_songs(self) -> Set[str]:
         """Load list of songs to exclude from generation (situational, meta, technical)."""
@@ -154,6 +155,7 @@ class SetlistGenerator:
         era: Optional[str] = None,
         year: Optional[int] = None,
         exclude_previous_show: bool = True,
+        max_segues_per_set: Optional[int] = None,
     ) -> GeneratedSetlist:
         """Produce a setlist honoring baseline Phish show conventions.
 
@@ -167,6 +169,9 @@ class SetlistGenerator:
             year: Restrict historical data to performances through the end of ``year``.
             exclude_previous_show: When ``True`` (default), songs from the previous show
                 are excluded from selection.
+            max_segues_per_set: Maximum number of mandatory segue patterns allowed per
+                segment. When ``None``, no additional cap is enforced at the generator
+                level (service layer defaults still apply).
         """
 
         if num_sets not in (2, 3):
@@ -184,6 +189,8 @@ class SetlistGenerator:
             cutoff = date(year, 12, 31)
 
         lengths = {**DEFAULT_SET_LENGTHS, **(set_lengths or {})}
+        # Reset per-segment segue counters for this generation run
+        self._segment_segue_counts = {}
 
         # Adjust song counts based on jamminess level
         # High jamminess (extended jams) → fewer songs needed to fill duration
@@ -294,6 +301,7 @@ class SetlistGenerator:
 
             adjacency_map = set_stats.adjacency_map if set_stats else None
 
+            self._segment_segue_counts[set_label] = 0
             set_songs, set_notes = self._compose_segment(
                 canonical_set=canonical_set,
                 segment_label=set_label,
@@ -308,6 +316,7 @@ class SetlistGenerator:
                 adjacency_map=adjacency_map,
                 duration_target=duration_targets.get(canonical_set),
                 previous_sets_songs=completed_sets_songs,  # Pass previous sets for cross-set dependencies
+                max_segues_per_set=max_segues_per_set,
             )
             metadata_notes.extend(set_notes)
             sets.append(SetSegment(label=set_label, songs=set_songs))
@@ -320,6 +329,7 @@ class SetlistGenerator:
             encore_longform = segment_longform_titles.get("encore", set())
             encore_adjacency = encore_stats.adjacency_map if encore_stats else None
 
+            self._segment_segue_counts["Encore"] = 0
             encore_songs, encore_notes = self._compose_segment(
                 canonical_set="encore",
                 segment_label="Encore",
@@ -334,6 +344,7 @@ class SetlistGenerator:
                 adjacency_map=encore_adjacency,
                 duration_target=duration_targets.get("encore"),
                 previous_sets_songs=completed_sets_songs,  # Pass all previous sets for cross-set dependencies
+                max_segues_per_set=max_segues_per_set,
             )
             metadata_notes.extend(encore_notes)
             encore_segment = SetSegment(label="Encore", songs=encore_songs)
@@ -417,9 +428,11 @@ class SetlistGenerator:
         adjacency_map: Optional[Dict[str, Dict[str, int]]],
         duration_target: Optional[Tuple[int, int]],
         previous_sets_songs: Optional[Dict[str, List[str]]] = None,
+        max_segues_per_set: Optional[int] = None,
     ) -> Tuple[List[str], List[str]]:
         notes: List[str] = []
         songs: List[str] = []
+        self._segment_segue_counts.setdefault(segment_label, 0)
 
         duration_capped = False
         song_stats = stats.song_durations if stats else {}
@@ -437,6 +450,7 @@ class SetlistGenerator:
                 desired_count=remaining,
                 frequencies_by_set=frequencies_by_set,
                 target_set=canonical_set,
+                segment_label=segment_label,
                 used_songs=used_songs,
                 eligible_songs=eligible_songs,
                 previous_song=previous_song,
@@ -444,6 +458,7 @@ class SetlistGenerator:
                 stats=stats,
                 duration_target=duration_target,
                 previous_sets_songs=previous_sets_songs,
+                max_segues_per_set=max_segues_per_set,
             )
             if additional:
                 songs.extend(additional)
@@ -461,6 +476,7 @@ class SetlistGenerator:
                 desired_count=1,
                 frequencies_by_set=frequencies_by_set,
                 target_set=canonical_set,
+                segment_label=segment_label,
                 used_songs=used_songs,
                 eligible_songs=eligible_songs,
                 previous_song=previous_song,
@@ -468,6 +484,7 @@ class SetlistGenerator:
                 stats=stats,
                 duration_target=duration_target,
                 previous_sets_songs=previous_sets_songs,
+                max_segues_per_set=max_segues_per_set,
             )
             if extra:
                 songs.extend(extra)
@@ -617,6 +634,7 @@ class SetlistGenerator:
         desired_count: int,
         frequencies_by_set: Dict[str, List[SongFrequency]],
         target_set: str,
+        segment_label: str,
         used_songs: Set[str],
         eligible_songs: Iterable[str],
         previous_song: Optional[str],
@@ -624,6 +642,7 @@ class SetlistGenerator:
         stats: Optional[SegmentStatistics],
         duration_target: Optional[Tuple[int, int]],
         previous_sets_songs: Optional[Dict[str, List[str]]] = None,
+        max_segues_per_set: Optional[int] = None,
     ) -> Tuple[List[str], bool, float]:
         # Use 80th percentile for fallback calculations (backward compat)
         song_durations = stats.song_durations if stats else {}
@@ -721,6 +740,11 @@ class SetlistGenerator:
                     # Find the complete pattern and add all songs
                     segue_pattern = self._find_complete_segue_pattern(choice, mandatory_segues)
                     if segue_pattern and len(segue_pattern) > 1:
+                        current_segues = self._segment_segue_counts.get(segment_label, 0)
+                        if max_segues_per_set is not None and current_segues >= max_segues_per_set:
+                            # Already hit the cap for this segment; skip additional patterns
+                            pool = [freq for freq in pool if freq.title != choice]
+                            continue
                         # Check if we have room for the full pattern
                         remaining_slots = desired_count - len(selection)
                         if len(segue_pattern) <= remaining_slots:
@@ -732,6 +756,9 @@ class SetlistGenerator:
                             
                             # Update prev to last song in pattern
                             prev = segue_pattern[-1]
+                            if max_segues_per_set is not None:
+                                current_segues += 1
+                                self._segment_segue_counts[segment_label] = current_segues
                             
                             # Continue to next iteration (skip normal single-song logic below)
                             continue
@@ -1212,4 +1239,3 @@ class SetlistGenerator:
                 return song
         
         return weighted_candidates[-1][0]
-

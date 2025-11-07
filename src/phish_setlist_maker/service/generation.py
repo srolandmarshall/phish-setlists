@@ -1415,6 +1415,7 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
         include_encore=request.include_encore,
         set_lengths=set_lengths,
         exclude_previous_show=not allow_previous_show,
+        max_segues_per_set=request.max_segues_per_set,
     )
 
     metadata = generated.metadata
