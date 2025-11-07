@@ -40,7 +40,11 @@ responses = "^0.25.3"
 [tool.pytest.ini_options]
 addopts = "-q"
 pythonpath = ["src"]
+markers = [
+    "segue: tests for segue groups functionality (builder, feature store, generator integration)",
+]
 
 [tool.poetry.scripts]
 server = "phish_setlist_maker.api.cli:start_server"
 http-start = "phish_setlist_maker.api.cli:start_server"
+validate-segues = "scripts.validate_segues:main"

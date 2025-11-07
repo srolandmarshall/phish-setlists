@@ -80,6 +80,7 @@ class SetlistGenerator:
         ml_transition_bonus: float = 0.1,
         features_dir: Optional[Path] = None,
         jamminess: Optional[float] = None,
+        same_show_segues: bool = False,
     ):
         self.session = session
         self.rng = rng or Random()
@@ -91,7 +92,8 @@ class SetlistGenerator:
         # Jamminess: 0.0 = tight/concise, 0.5 = balanced, 1.0 = maximum jams
         # None = use dynamic intensity based on remaining budget
         self._jamminess = max(0.0, min(1.0, jamminess)) if jamminess is not None else None
-        
+        self._same_show_segues = same_show_segues
+
         self._feature_store: Optional[FeatureStore] = None
         if use_ml_features:
             if features_dir is None:
@@ -674,6 +676,26 @@ class SetlistGenerator:
 
         while len(selection) < desired_count:
             pool = [freq for freq in pool if freq.title not in used_songs]
+            
+            # PHASE 4.1A: Filter segue-only songs from pool BEFORE picking
+            # These songs should NEVER appear alone (e.g., Weekapaug, Hydrogen)
+            if self._use_ml_features and self._feature_store:
+                filtered_pool = []
+                for freq in pool:
+                    is_segue_only = False
+                    mandatory_segues = self._feature_store.get_mandatory_segues(freq.title)
+                    for segue in mandatory_segues:
+                        songs = segue.get('songs', [])
+                        if len(songs) > 1 and freq.title in songs and songs[0] != freq.title:
+                            # This song appears mid/end of a segue pattern - it's segue-only
+                            is_segue_only = True
+                            break
+                    
+                    if not is_segue_only:
+                        filtered_pool.append(freq)
+                
+                pool = filtered_pool if filtered_pool else pool
+            
             if not pool:
                 break
 
@@ -686,6 +708,34 @@ class SetlistGenerator:
             )
             if not choice:
                 break
+            
+            # PHASE 4.1B: Check if choice starts a mandatory segue pattern
+            # If so, add ALL songs in the segue as a group (not just next song)
+            if self._use_ml_features and self._feature_store:
+                mandatory_segues = self._feature_store.get_mandatory_segues(choice)
+                if mandatory_segues:
+                    # This song starts (or continues) a mandatory segue
+                    # Find the complete pattern and add all songs
+                    segue_pattern = self._find_complete_segue_pattern(choice, mandatory_segues)
+                    if segue_pattern and len(segue_pattern) > 1:
+                        # Check if we have room for the full pattern
+                        remaining_slots = desired_count - len(selection)
+                        if len(segue_pattern) <= remaining_slots:
+                            # Add entire segue pattern
+                            for song_in_pattern in segue_pattern:
+                                if song_in_pattern not in used_songs:
+                                    selection.append(song_in_pattern)
+                                    used_songs.add(song_in_pattern)
+                            
+                            # Update prev to last song in pattern
+                            prev = segue_pattern[-1]
+                            
+                            # Continue to next iteration (skip normal single-song logic below)
+                            continue
+                        else:
+                            # Not enough room for full pattern, skip this song entirely
+                            pool = [freq for freq in pool if freq.title != choice]
+                            continue
 
             # NEW: Check ordering constraints (Phase 2.2)
             if self._use_ml_features and self._feature_store:
@@ -727,6 +777,17 @@ class SetlistGenerator:
             used_songs.add(choice)
             current_duration = estimated_total
             prev = choice
+            
+            # PHASE 4.2: Lottery ticket logic for rare segues
+            # After adding a song, check if it has rare segues (low-frequency "lottery tickets")
+            # If yes, roll the dice to see if we add the rare continuation
+            if self._use_ml_features and self._feature_store:
+                # Rare segues are indexed by track_id, but we need to query by song title
+                # We'll need to get ALL rare segues for this song title across all performances
+                # For now, skip lottery logic since we need track-level selection
+                # TODO: Implement track-level selection to enable lottery tickets
+                pass
+            
             pool = [freq for freq in pool if freq.title not in used_songs]
 
         return selection, duration_capped, current_duration
@@ -856,6 +917,17 @@ class SetlistGenerator:
         # Era-aware exclusions: "I Am the Walrus" only allowed in 4.0 era
         if self._current_era != "4.0" and "I Am the Walrus" in eligible:
             eligible.discard("I Am the Walrus")
+        
+        # PHASE 4: Filter out songs that MUST be part of mandatory segues
+        # These songs should not appear unless their full segue pattern can be completed
+        if self._feature_store:
+            songs_in_mandatory_segues = set()
+            for song in eligible:
+                mandatory_segues = self._feature_store.get_mandatory_segues(song)
+                if mandatory_segues:
+                    # This song is part of mandatory segue(s)
+                    # We'll allow selection but warn if pattern can't complete
+                    songs_in_mandatory_segues.add(song)
 
         candidates = [
             freq for freq in frequencies_by_set.get(target_set, []) if freq.title in eligible
@@ -896,6 +968,31 @@ class SetlistGenerator:
         weighted_candidates: List[Tuple[SongFrequency, float]] = [
             (freq, float(freq.weight)) for freq in available
         ]
+
+        # PHASE 4: Mandatory segue enforcement moved to _select_with_duration_budget
+        # We now add complete segue patterns as a group, not just enforce next song
+        # Commenting out this enforcement since it's redundant with pattern completion:
+        #
+        # if previous_song and self._feature_store:
+        #     mandatory_segues = self._feature_store.get_mandatory_segues(previous_song)
+        #     if mandatory_segues:
+        #         valid_next_songs = set()
+        #         for segue in mandatory_segues:
+        #             if previous_song in segue['songs']:
+        #                 idx = segue['songs'].index(previous_song)
+        #                 if idx + 1 < len(segue['songs']):
+        #                     valid_next_songs.add(segue['songs'][idx + 1])
+        #         if valid_next_songs:
+        #             weighted_candidates = [
+        #                 (freq, weight) for freq, weight in weighted_candidates
+        #                 if freq.title in valid_next_songs
+        #             ]
+        #             if not weighted_candidates:
+        #                 logger.warning(
+        #                     "Mandatory segue pattern started but no continuation available: %s",
+        #                     previous_song
+        #                 )
+        #                 return None
 
         # NEW: Filter out forbidden transitions (Phase 2.2)
         if self._use_ml_features and self._feature_store and previous_song:
@@ -985,6 +1082,33 @@ class SetlistGenerator:
             if rand <= cumulative:
                 return freq.title
         return weighted_candidates[-1][0].title
+    
+    def _find_complete_segue_pattern(
+        self,
+        song: str,
+        mandatory_segues: List[dict],
+    ) -> Optional[List[str]]:
+        """
+        Given a song and its mandatory segues, find the complete pattern.
+        
+        For example, if song is "Mike's Song" and it's part of:
+        ["Mike's Song", "I Am Hydrogen", "Weekapaug Groove"]
+        
+        Return the complete pattern starting from this song.
+        """
+        if not mandatory_segues:
+            return None
+        
+        # Find the segue where this song appears
+        for segue in mandatory_segues:
+            songs_in_pattern = segue.get('songs', [])
+            if song in songs_in_pattern:
+                # Find position of this song in the pattern
+                idx = songs_in_pattern.index(song)
+                # Return from this song forward
+                return songs_in_pattern[idx:]
+        
+        return None
 
     def _select_set_ender(
         self,

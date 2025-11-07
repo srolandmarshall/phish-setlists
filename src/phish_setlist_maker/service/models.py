@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional, Tuple
 
@@ -19,6 +19,16 @@ class SongDisplay:
     origin: Optional[str] = None
     show_date: Optional[str] = None
     track_id: Optional[int] = None
+    rare_segue_next_tracks: Optional[List[int]] = None  # PHASE 4.2: track_ids of rare segue continuations
+    # Segue metadata for API response
+    is_segue: bool = False
+    segue_type: Optional[str] = None  # "rare" or "lottery_ticket"
+    segue_pattern: Optional[str] = None
+    segue_position: Optional[int] = None
+    segue_group_id: Optional[str] = None
+    historical_occurrences: Optional[int] = None
+    rarity_score: Optional[float] = None
+    likes_count: Optional[int] = None
 
     @property
     def duration_label(self) -> Optional[str]:
@@ -46,6 +56,7 @@ class PlaylistArtifacts:
     first_track_url: Optional[str]
     m3u_text: Optional[str]
     missing_tracks: List[str]
+    segue_notes: List[str] = field(default_factory=list)  # NEW: Notes about segues (mandatory, lottery tickets)
 
 
 @dataclass(slots=True)

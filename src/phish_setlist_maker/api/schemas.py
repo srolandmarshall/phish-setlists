@@ -32,6 +32,40 @@ class SongModel(BaseModel):
     origin: Optional[str] = None
     show_date: Optional[str] = None
     track_id: Optional[int] = None
+    
+    # Segue metadata (new in v0.2.1)
+    is_segue: bool = Field(
+        default=False,
+        description="Whether this song is part of a segue group"
+    )
+    segue_type: Optional[Literal["mandatory", "rare", "lottery_ticket"]] = Field(
+        default=None,
+        description="Type of segue: mandatory (always appear together), rare (<50 occurrences), or lottery_ticket (rare with high likes)"
+    )
+    segue_pattern: Optional[str] = Field(
+        default=None,
+        description="Full segue pattern, e.g., 'Mike's Song -> I Am Hydrogen -> Weekapaug Groove'"
+    )
+    segue_position: Optional[int] = Field(
+        default=None,
+        description="Position in the segue sequence (1, 2, 3, etc.)"
+    )
+    segue_group_id: Optional[str] = Field(
+        default=None,
+        description="Unique ID grouping all songs in this segue together"
+    )
+    historical_occurrences: Optional[int] = Field(
+        default=None,
+        description="Number of times this segue has occurred historically"
+    )
+    rarity_score: Optional[float] = Field(
+        default=None,
+        description="Rarity score from 0.0-1.0 (lower = rarer). Only for rare/lottery segues"
+    )
+    likes_count: Optional[int] = Field(
+        default=None,
+        description="Number of likes from phish.net for this specific track"
+    )
 
 
 class SegmentModel(BaseModel):
@@ -85,6 +119,10 @@ class GenerateRequestModel(BaseModel):
     ml_placement_weight: float = Field(default=0.3, ge=0.0, le=1.0, description="Weight for ML placement probabilities (0-1)")
     ml_transition_bonus: float = Field(default=0.1, ge=0.0, le=1.0, description="Bonus for ML transition lift scores (0-1)")
     jamminess: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Jam intensity override (0=tight/concise, 0.5=balanced, 1.0=maximum jam). None=dynamic selection.")
+    same_show_segues: bool = Field(
+        default=False,
+        description="Ensure songs in mandatory segues come from the same show performance. Also enables lottery ticket injection (5% chance) for rare historical segues."
+    )
 
     @field_validator("set_lengths")
     @classmethod

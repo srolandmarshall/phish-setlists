@@ -248,12 +248,17 @@ def _update_track_cache(
         "show_date": show_date,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
-    session.execute(
-        update(Track)
-        .where(Track.id == track_id)
-        .values(metadata_cache=values)
-    )
-    session.flush()
+    try:
+        session.execute(
+            update(Track)
+            .where(Track.id == track_id)
+            .values(metadata_cache=values)
+        )
+        session.flush()
+    except Exception:
+        # Skip cache update if database schema doesn't match
+        # (e.g., missing metadata_cache column or other schema issues)
+        pass
 
 
 def resolve_track_metadata(

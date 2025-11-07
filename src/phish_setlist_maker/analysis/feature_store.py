@@ -108,6 +108,7 @@ class FeatureStore:
         self._load_ordering_constraints()
         self._load_cross_set_dependencies()
         self._load_set_ending_frequencies()
+        self._load_segue_groups()
 
     def _load_song_features(self) -> None:
         """Load song-level features from parquet."""
@@ -434,3 +435,54 @@ class FeatureStore:
             for (song, s_label), freq in self._set_ending_frequencies.items()
             if s_label == set_label and freq.ending_probability >= min_probability
         ]
+    
+    def _load_segue_groups(self) -> None:
+        """Load pre-computed segue groups (mandatory + rare)."""
+        segue_path = self.features_dir / "segue_groups.parquet"
+        rare_path = self.features_dir / "rare_segues.parquet"
+        
+        # Gracefully handle missing files
+        if not segue_path.exists():
+            self._segue_groups = []
+            self._segue_by_song = {}
+        else:
+            df = pd.read_parquet(segue_path)
+            self._segue_groups = df.to_dict('records')
+            
+            # Build index: song -> segue_ids
+            self._segue_by_song = {}
+            for group in self._segue_groups:
+                for song in group['songs']:
+                    if song not in self._segue_by_song:
+                        self._segue_by_song[song] = []
+                    self._segue_by_song[song].append(group['segue_id'])
+        
+        if not rare_path.exists():
+            self._rare_segues = []
+            self._segue_by_track = {}
+        else:
+            df_rare = pd.read_parquet(rare_path)
+            self._rare_segues = df_rare.to_dict('records')
+            
+            # Build index: track_id -> rare segues
+            self._segue_by_track = {}
+            for segue in self._rare_segues:
+                track_id = segue['tracks'][0]  # First track in pair
+                if track_id not in self._segue_by_track:
+                    self._segue_by_track[track_id] = []
+                self._segue_by_track[track_id].append(segue)
+    
+    def get_mandatory_segues(self, song_title: str) -> List[dict]:
+        """Get mandatory segues for a song."""
+        if self._segue_by_song is None:
+            return []
+        
+        segue_ids = self._segue_by_song.get(song_title, [])
+        return [s for s in self._segue_groups if s['segue_id'] in segue_ids]
+    
+    def get_rare_segues_from_track(self, track_id: int) -> List[dict]:
+        """Get rare segues that could follow this specific track."""
+        if self._segue_by_track is None:
+            return []
+        
+        return self._segue_by_track.get(track_id, [])

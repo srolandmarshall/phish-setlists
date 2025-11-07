@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 import logging
 import re
 from random import Random, SystemRandom
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -97,6 +97,7 @@ class GenerationRequest:
     ml_placement_weight: float = 0.3
     ml_transition_bonus: float = 0.1
     jamminess: Optional[float] = None  # 0.0 = tight, 0.5 = balanced, 1.0 = max jam
+    same_show_segues: bool = False  # Ensure segues from same show performance
 
 
 def infer_default_era(year: Optional[int]) -> Optional[str]:
@@ -140,6 +141,9 @@ def _select_track_display(
     missing: Dict[str, int],
     is_set_ender: bool = False,
     canonical_set: Optional[str] = None,
+    feature_store = None,  # Optional FeatureStore for lottery logic
+    same_show_segues: bool = False,
+    generated_setlist = None,  # GeneratedSetlist for tracking
 ) -> Optional[SongDisplay]:
     # Try to use set-ending tracks if this song is a set closer
     if is_set_ender and canonical_set:
@@ -157,7 +161,68 @@ def _select_track_display(
             raise PlaylistServiceError(f"No track recordings available for '{song_title}'.")
         return None
 
-    selection = rng.choice(candidates)
+    # NEW: Same-show segue logic
+    # If same_show_segues is enabled and this song is part of a mandatory segue,
+    # filter candidates to only include tracks from shows where the complete segue exists
+    if same_show_segues and feature_store and generated_setlist:
+        mandatory_segues = feature_store.get_mandatory_segues(song_title)
+        if mandatory_segues:
+            # Get all songs in the current set to find which segue pattern we're building
+            current_set_songs = []
+            for segment in generated_setlist.sets:
+                current_set_songs.extend(segment.songs)
+            if generated_setlist.encore:
+                current_set_songs.extend(generated_setlist.encore.songs)
+
+            # Find a complete segue group from these candidates
+            # Preference: segues where all songs in the pattern are consecutive in current set
+            segue_show_ids = set()
+            for segue in mandatory_segues:
+                segue_tracks = segue.get('tracks', [])
+                if segue_tracks:
+                    # Collect show_ids from tracks in this segue
+                    segue_show_id = segue.get('show_id')
+                    if segue_show_id:
+                        segue_show_ids.add(segue_show_id)
+
+            if segue_show_ids:
+                # Filter candidates to only include tracks from shows where the segue exists
+                filtered = [c for c in candidates if hasattr(c, 'show_id') and c.show_id in segue_show_ids]
+                if filtered:
+                    candidates = filtered
+
+    # PHASE 4.2: Lottery ticket logic
+    # Check if any candidates have rare segues, and prioritize them (weighted by lottery_weight)
+    # IMPORTANT: Only boost lottery tracks when same_show_segues is enabled
+    if feature_store and same_show_segues:
+        candidates_with_lottery = []
+        for candidate in candidates:
+            rare_segues = feature_store.get_rare_segues_from_track(candidate.track_id)
+            if rare_segues:
+                # This track has rare segue(s) - boost its selection probability
+                # Weight by lottery_weight from segue metadata
+                max_lottery_weight = max(segue.get('lottery_weight', 1) for segue in rare_segues)
+                candidates_with_lottery.append((candidate, max_lottery_weight))
+            else:
+                # Normal track, weight = 1
+                candidates_with_lottery.append((candidate, 1))
+        
+        # Weighted random selection
+        total_weight = sum(weight for _, weight in candidates_with_lottery)
+        if total_weight > 0:
+            rand_val = rng.random() * total_weight
+            cumulative = 0.0
+            for candidate, weight in candidates_with_lottery:
+                cumulative += weight
+                if rand_val <= cumulative:
+                    selection = candidate
+                    break
+            else:
+                selection = candidates_with_lottery[-1][0]
+        else:
+            selection = rng.choice(candidates)
+    else:
+        selection = rng.choice(candidates)
 
     logger.info(
         "Selected local track candidate for %s track_id=%s slug=%s",
@@ -165,6 +230,55 @@ def _select_track_display(
         selection.track_id,
         selection.slug,
     )
+    
+    # PHASE 4.2: Check if selected track has rare segues (with lottery probability)
+    rare_segue_next_tracks = None
+    is_segue = False
+    segue_type = None
+    segue_pattern = None
+    segue_position = None
+    segue_group_id = None
+    historical_occurrences = None
+    rarity_score = None
+    likes_count_segue = None
+
+    # IMPORTANT: Lottery tickets only work with same_show_segues enabled
+    # Otherwise continuation tracks would be from different shows, breaking authenticity
+    if feature_store and same_show_segues:
+        rare_segues = feature_store.get_rare_segues_from_track(selection.track_id)
+        if rare_segues:
+            # Lottery ticket: only inject rare segues 5% of the time
+            # This keeps them truly rare and special
+            lottery_chance = 0.05
+            if rng.random() < lottery_chance:
+                # Pick one of the rare segues at random
+                selected_segue = rng.choice(rare_segues)
+
+                # Extract next track IDs from rare segue patterns
+                rare_segue_next_tracks = []
+                tracks_in_pattern = selected_segue.get('tracks', [])
+                # Find this track's position and get subsequent tracks
+                if selection.track_id in tracks_in_pattern:
+                    idx = tracks_in_pattern.index(selection.track_id)
+                    # Add all following tracks in the segue
+                    rare_segue_next_tracks.extend(tracks_in_pattern[idx+1:])
+
+                if rare_segue_next_tracks:
+                    # Populate segue metadata for API response
+                    is_segue = True
+                    segue_type = "lottery_ticket"
+                    segue_pattern = selected_segue.get('pattern')
+                    segue_position = idx + 1  # Position in the pattern (1-indexed)
+                    segue_group_id = selected_segue.get('segue_id')
+                    historical_occurrences = selected_segue.get('historical_occurrences')
+                    rarity_score = selected_segue.get('rarity_score')
+                    likes_count_segue = selected_segue.get('likes_count')
+
+                    logger.info(
+                        "🎰 LOTTERY TICKET! Track %s has rare segue to tracks: %s",
+                        selection.track_id,
+                        rare_segue_next_tracks
+                    )
 
     mp3_url, remote_duration, remote_show_date = resolve_track_metadata(
         db_session,
@@ -200,6 +314,15 @@ def _select_track_display(
         origin=origin_text,
         show_date=show_date,
         track_id=selection.track_id,
+        rare_segue_next_tracks=rare_segue_next_tracks,
+        is_segue=is_segue,
+        segue_type=segue_type,
+        segue_pattern=segue_pattern,
+        segue_position=segue_position,
+        segue_group_id=segue_group_id,
+        historical_occurrences=historical_occurrences,
+        rarity_score=rarity_score,
+        likes_count=likes_count_segue,
     )
 
 
@@ -212,11 +335,16 @@ def prepare_playlist_artifacts(
     rng: Random,
     include_m3u: bool,
     strict: bool,
+    feature_store = None,  # PHASE 4.2: For lottery logic
+    same_show_segues: bool = False,
+    generated_setlist = None,  # GeneratedSetlist for tracking segues
 ) -> PlaylistArtifacts:
     track_cache: Dict[str, Optional[SongDisplay]] = {}
     missing: Dict[str, int] = {}
     playlist_lines: List[str] = ["#EXTM3U"] if include_m3u else []
     first_track_url: Optional[str] = None
+    injected_segue_tracks: Set[int] = set()  # PHASE 4.2: Track IDs already injected
+    segue_notes: List[str] = []  # NEW: Collect notes about segues
 
     def append_track(song_title: str, is_set_ender: bool = False, canonical_set: Optional[str] = None) -> None:
         nonlocal first_track_url
@@ -242,6 +370,9 @@ def prepare_playlist_artifacts(
                     missing=missing,
                     is_set_ender=is_set_ender,
                     canonical_set=canonical_set,
+                    feature_store=feature_store,  # PHASE 4.2
+                    same_show_segues=same_show_segues,
+                    generated_setlist=generated_setlist,
                 )
                 track_cache[normalized] = display
 
@@ -260,6 +391,97 @@ def prepare_playlist_artifacts(
 
         if first_track_url is None:
             first_track_url = display.mp3_url
+        
+        # PHASE 4.2: Check if this track has rare segue continuations (lottery ticket!)
+        if display.rare_segue_next_tracks and feature_store:
+            for next_track_id in display.rare_segue_next_tracks:
+                # Avoid injecting same track twice
+                if next_track_id in injected_segue_tracks:
+                    continue
+                injected_segue_tracks.add(next_track_id)
+                
+                # Fetch track metadata directly by track_id
+                from ..models import Track, SongTrack, Song
+                # Only load columns we need (avoid missing audio_file_data/waveform_png_data)
+                track_row = db_session.query(
+                    Track.id, Track.slug, Track.duration, Track.likes_count, 
+                    Track.metadata_cache, Track.show_id, Track.set, Track.position
+                ).filter(Track.id == next_track_id).first()
+                if not track_row:
+                    continue
+                
+                # Get song title from track
+                song_track = db_session.query(SongTrack).filter(SongTrack.track_id == next_track_id).first()
+                if not song_track:
+                    continue
+                song = db_session.query(Song).filter(Song.id == song_track.song_id).first()
+                if not song:
+                    continue
+                
+                # Create CandidateTrack for the segue continuation
+                from .tracks import CandidateTrack, resolve_track_metadata
+                candidate = CandidateTrack(
+                    track_id=next_track_id,
+                    slug=track_row.slug,
+                    duration=track_row.duration,
+                    show_date=None,
+                    likes_count=track_row.likes_count or 0,
+                    metadata_cache=track_row.metadata_cache,
+                )
+                
+                # Resolve metadata
+                mp3_url, remote_duration, remote_show_date = resolve_track_metadata(
+                    db_session,
+                    candidate,
+                    song_slug=song.slug,
+                    rng=rng,
+                    strict=False,
+                )
+                
+                if mp3_url:
+                    duration_seconds = candidate.duration if candidate.duration else remote_duration
+                    if duration_seconds and duration_seconds > 6000:
+                        duration_seconds = duration_seconds // 1000
+
+                    logger.info("🎰 INJECTING RARE SEGUE: %s (track_id=%s)", song.title, next_track_id)
+
+                    # Add lottery ticket note
+                    show_date_str = remote_show_date or "unknown date"
+                    lottery_note = f"🎰 Lottery ticket! Rare {display.title} → {song.title} from {show_date_str}"
+                    if lottery_note not in segue_notes:
+                        segue_notes.append(lottery_note)
+
+                    # Add to playlist
+                    if include_m3u:
+                        duration_sec = duration_seconds if duration_seconds is not None else -1
+                        playlist_lines.append(f"#EXTINF:{duration_sec},{song.title} [{show_date_str}] (rare segue)")
+                        playlist_lines.append(mp3_url)
+
+                    # CRITICAL: Add the injected track to track_cache so it appears in the response!
+                    # Create a SongDisplay for the continuation track
+                    continuation_display = SongDisplay(
+                        title=song.title,
+                        mp3_url=mp3_url,
+                        duration_seconds=duration_seconds,
+                        origin=None,  # Could determine from catalog if needed
+                        show_date=show_date_str,
+                        track_id=next_track_id,
+                        is_segue=True,
+                        segue_type="lottery_ticket",
+                        segue_pattern=f"{display.title} -> {song.title}",
+                        segue_position=2,  # This is the continuation track
+                        segue_group_id=display.segue_group_id,  # Use same group_id as source
+                        historical_occurrences=display.historical_occurrences,
+                        rarity_score=display.rarity_score,
+                        likes_count=candidate.likes_count,
+                    )
+
+                    # Add to cache so it appears in response tracks
+                    cache_key = normalize_title(song.title)
+                    track_cache[cache_key] = continuation_display
+
+    def append_track_with_injection(song_title: str, is_set_ender: bool = False, canonical_set: Optional[str] = None) -> None:
+        append_track(song_title, is_set_ender, canonical_set)
 
     for segment in segments:
         from ..generator.historical import normalize_set_label
@@ -267,13 +489,13 @@ def prepare_playlist_artifacts(
         for idx, raw_song in enumerate(segment.songs):
             is_last = (idx == len(segment.songs) - 1)
             for title in split_song_titles(raw_song):
-                append_track(title, is_set_ender=is_last, canonical_set=canonical)
+                append_track_with_injection(title, is_set_ender=is_last, canonical_set=canonical)
 
     if encore:
         for idx, raw_song in enumerate(encore.songs):
             is_last = (idx == len(encore.songs) - 1)
             for title in split_song_titles(raw_song):
-                append_track(title, is_set_ender=is_last, canonical_set="encore")
+                append_track_with_injection(title, is_set_ender=is_last, canonical_set="encore")
 
     sections: List[Tuple[str, List[SongDisplay]]] = []
     for segment in segments:
@@ -284,6 +506,65 @@ def prepare_playlist_artifacts(
                 display = track_cache.get(key)
                 if display:
                     rows.append(display)
+
+                    # If this track has rare segue continuations, add them to the section
+                    if display.rare_segue_next_tracks and feature_store:
+                        from ..models import Track, SongTrack, Song
+                        for next_track_id in display.rare_segue_next_tracks:
+                            if next_track_id in injected_segue_tracks:
+                                continue
+
+                            track_row = db_session.query(
+                                Track.id, Track.slug, Track.duration, Track.likes_count,
+                                Track.metadata_cache, Track.show_id, Track.set, Track.position
+                            ).filter(Track.id == next_track_id).first()
+                            if not track_row:
+                                continue
+
+                            song_track = db_session.query(SongTrack).filter(SongTrack.track_id == next_track_id).first()
+                            if not song_track:
+                                continue
+                            song = db_session.query(Song).filter(Song.id == song_track.song_id).first()
+                            if not song:
+                                continue
+
+                            from .tracks import CandidateTrack, resolve_track_metadata
+                            candidate = CandidateTrack(
+                                track_id=next_track_id,
+                                slug=track_row.slug,
+                                duration=track_row.duration,
+                                show_date=None,
+                                likes_count=track_row.likes_count or 0,
+                                metadata_cache=track_row.metadata_cache,
+                            )
+
+                            mp3_url, remote_duration, remote_show_date = resolve_track_metadata(
+                                db_session, candidate, song_slug=song.slug, rng=rng, strict=False
+                            )
+
+                            if mp3_url:
+                                duration_seconds = candidate.duration if candidate.duration else remote_duration
+                                if duration_seconds and duration_seconds > 6000:
+                                    duration_seconds = duration_seconds // 1000
+                                show_date_str = remote_show_date or "unknown"
+
+                                continuation_display = SongDisplay(
+                                    title=song.title,
+                                    mp3_url=mp3_url,
+                                    duration_seconds=duration_seconds,
+                                    origin=determine_origin_from_entry(None),
+                                    show_date=show_date_str,
+                                    track_id=next_track_id,
+                                    is_segue=True,
+                                    segue_type="lottery_ticket",
+                                    segue_pattern=display.segue_pattern,
+                                    segue_position=2 if len(rows) == 1 else len(rows) + 1,
+                                    segue_group_id=display.segue_group_id,
+                                    historical_occurrences=display.historical_occurrences,
+                                    rarity_score=display.rarity_score,
+                                    likes_count=display.likes_count,
+                                )
+                                rows.append(continuation_display)
                 else:
                     entry = catalog.by_title.get(key)
                     origin = determine_origin_from_entry(entry) if entry else None
@@ -311,6 +592,7 @@ def prepare_playlist_artifacts(
         first_track_url=first_track_url,
         m3u_text=m3u_text,
         missing_tracks=missing_titles,
+        segue_notes=segue_notes,
     )
 
 
@@ -347,6 +629,7 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
         ml_placement_weight=request.ml_placement_weight,
         ml_transition_bonus=request.ml_transition_bonus,
         jamminess=request.jamminess,
+        same_show_segues=request.same_show_segues,
     )
 
     if request.set_lengths:
@@ -394,6 +677,9 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
             rng=rng,
             include_m3u=request.include_playlist,
             strict=request.fail_on_playlist_error,
+            feature_store=generator._feature_store if request.use_ml_features else None,  # PHASE 4.2
+            same_show_segues=request.same_show_segues,
+            generated_setlist=generated,  # For tracking segues in metadata
         )
 
     track_lookup: Dict[str, SongDisplay] = {}
@@ -428,6 +714,33 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
             note = f"Playlist missing audio for {title} in local archive"
             if note not in metadata.notes:
                 metadata.notes.append(note)
+
+        # NEW: Add segue notes to metadata
+        for segue_note in playlist_artifacts.segue_notes:
+            if segue_note not in metadata.notes:
+                metadata.notes.append(segue_note)
+
+        # CRITICAL FIX: Update segments_details.tracks to match playlist_artifacts.sections
+        # This ensures injected rare segue tracks appear in the main sets response
+        if playlist_artifacts.sections:
+            for i, (section_label, section_tracks) in enumerate(playlist_artifacts.sections):
+                # Match section to corresponding segment by label
+                matching_segment = None
+                if section_label == "Encore" and encore_details:
+                    encore_details.tracks = list(section_tracks)
+                else:
+                    for segment in segments_details:
+                        if segment.label == section_label:
+                            matching_segment = segment
+                            break
+
+                    if matching_segment:
+                        # Update the tracks list to include injected tracks
+                        matching_segment.tracks = list(section_tracks)
+                        # Recalculate duration
+                        matching_segment.duration_seconds = sum(
+                            t.duration_seconds for t in section_tracks if t.duration_seconds
+                        )
 
     return GenerationResult(
         seed=seed,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from sqlalchemy import ForeignKey, Integer, String, Text, JSON
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, deferred
 
 from .base import Base
 
@@ -26,8 +26,8 @@ class Track(Base):
     likes_count: Mapped[int] = mapped_column(Integer, default=0)
     tags_count: Mapped[int] = mapped_column(Integer, default=0)
     jam_starts_at_second: Mapped[Optional[int]] = mapped_column(Integer)
-    audio_file_data: Mapped[Optional[str]] = mapped_column(Text)
-    waveform_png_data: Mapped[Optional[str]] = mapped_column(Text)
+    audio_file_data: Mapped[Optional[str]] = mapped_column(Text, deferred=True, nullable=True)
+    waveform_png_data: Mapped[Optional[str]] = mapped_column(Text, deferred=True, nullable=True)
     metadata_cache: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     show: Mapped[Optional["Show"]] = relationship("Show", back_populates="tracks")

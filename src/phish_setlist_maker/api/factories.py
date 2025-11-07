@@ -28,4 +28,5 @@ def build_generation_request(
         ml_placement_weight=model.ml_placement_weight,
         ml_transition_bonus=model.ml_transition_bonus,
         jamminess=model.jamminess,
+        same_show_segues=model.same_show_segues,
     )
