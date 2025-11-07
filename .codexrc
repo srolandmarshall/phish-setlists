@@ -1,0 +1,25 @@
+{
+  "sandbox": {
+    "network": "limited",
+    "allowedDomains": [
+      "registry.npmjs.org",
+      "github.com",
+      "raw.githubusercontent.com",
+      "localhost",
+      "phish-setlist-maker.fly.dev",
+      "inphinite-phront-end.fly.dev",
+      "inphinite.sammarshall.us"
+    ],
+    "allowedMethods": [
+      "GET",
+      "POST",
+      "PUT",
+      "HEAD"
+    ],
+    "workspaceWrite": true
+  },
+  "security": {
+    "promptInjectionProtection": true,
+    "secretsScanning": true
+  }
+}

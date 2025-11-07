@@ -7,6 +7,7 @@ from datetime import date, datetime
 from random import Random
 from typing import Dict, Iterable, List, Sequence, Tuple
 
+from phish_setlist_maker.constants import DEFAULT_SET_LENGTHS
 from phish_setlist_maker.generator.core import SetlistGenerator
 from phish_setlist_maker.models.show import Show
 from phish_setlist_maker.models.track import Track
@@ -175,3 +176,20 @@ def test_generator_respects_max_segues_per_set(db_session: Session) -> None:
     # Remaining slots should be filled with other songs
     assert any(song.startswith("Song Other") for song in set1_songs)
     assert len(set1_songs) == 6
+
+
+def test_length_cap_keeps_targets_near_defaults(db_session: Session) -> None:
+    generator = SetlistGenerator(db_session, rng=Random(0), adjacency_bonus=0.0)
+    lengths = {
+        "set1": 14,
+        "set2": 13,
+        "set3": 9,
+        "encore": 4,
+    }
+
+    generator._cap_lengths_for_segues(lengths, max_segues=2)
+
+    assert lengths["set1"] == max(6, DEFAULT_SET_LENGTHS["set1"] - 2) == 8
+    assert lengths["set2"] == max(6, DEFAULT_SET_LENGTHS["set2"] - 2) == 9
+    assert lengths["set3"] == DEFAULT_SET_LENGTHS["set3"] == 6
+    assert lengths["encore"] == DEFAULT_SET_LENGTHS["encore"] == 2

@@ -188,7 +188,10 @@ class SetlistGenerator:
         if year and cutoff.year > year:
             cutoff = date(year, 12, 31)
 
+        user_lengths_provided = set_lengths is not None
         lengths = {**DEFAULT_SET_LENGTHS, **(set_lengths or {})}
+        if not user_lengths_provided and max_segues_per_set is not None:
+            self._cap_lengths_for_segues(lengths, max_segues_per_set)
         # Reset per-segment segue counters for this generation run
         self._segment_segue_counts = {}
 
@@ -411,6 +414,24 @@ class SetlistGenerator:
         if not include_encore:
             targets.pop("encore", None)
         return targets
+
+    def _cap_lengths_for_segues(self, lengths: Dict[str, int], max_segues: int) -> None:
+        """Give segues room by clamping sampled set lengths toward modern norms."""
+        if max_segues <= 0:
+            return
+
+        buffer = min(max_segues, 2)  # leave at least 1-2 slots for injected songs
+        for label in ("set1", "set2", "set3"):
+            if label not in lengths:
+                continue
+            base = DEFAULT_SET_LENGTHS.get(label, lengths[label])
+            # Never shrink below 6 songs (historical low end) but keep under base-buffer
+            cap = max(6, base - buffer)
+            lengths[label] = min(lengths[label], cap)
+
+        # Encore stays tiny but cap it at the default
+        if "encore" in lengths:
+            lengths["encore"] = min(lengths["encore"], DEFAULT_SET_LENGTHS.get("encore", lengths["encore"]))
 
     def _compose_segment(
         self,
@@ -748,6 +769,18 @@ class SetlistGenerator:
                         # Check if we have room for the full pattern
                         remaining_slots = desired_count - len(selection)
                         if len(segue_pattern) <= remaining_slots:
+                            # Estimate duration impact before adding the pattern
+                            pattern_duration = 0.0
+                            for song_in_pattern in segue_pattern:
+                                pattern_duration += song_durations.get(song_in_pattern, fallback_duration) * safety_factor
+                            if (
+                                max_duration is not None
+                                and (base_song_count + len(selection) + len(segue_pattern)) >= 2
+                                and current_duration + pattern_duration > max_duration
+                            ):
+                                duration_capped = True
+                                pool = [freq for freq in pool if freq.title != choice]
+                                continue
                             # Add entire segue pattern
                             for song_in_pattern in segue_pattern:
                                 if song_in_pattern not in used_songs:
@@ -759,6 +792,7 @@ class SetlistGenerator:
                             if max_segues_per_set is not None:
                                 current_segues += 1
                                 self._segment_segue_counts[segment_label] = current_segues
+                            current_duration += pattern_duration
                             
                             # Continue to next iteration (skip normal single-song logic below)
                             continue
