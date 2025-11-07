@@ -279,9 +279,20 @@ class FeatureStore:
 
     def get_song_features(self, song_name: str) -> Optional[SongFeatures]:
         """Retrieve features for a specific song."""
+        import logging
+        logger = logging.getLogger(__name__)
+
         if self._song_features is None:
             raise RuntimeError("FeatureStore not loaded. Call load() first.")
-        return self._song_features.get(song_name)
+
+        result = self._song_features.get(song_name)
+        if not result and song_name in ["Mike's Song", "Runaway Jim", "Colonel Forbin's Ascent"]:
+            # DEBUG: Show what keys we DO have that are similar
+            logger.warning("🔍 FEATURE STORE: Lookup failed for '%s'", song_name)
+            similar = [k for k in self._song_features.keys() if song_name.lower().split()[0] in k.lower()]
+            logger.warning("🔍 FEATURE STORE: Similar keys: %s", similar[:3])
+
+        return result
 
     def get_transition_lift(
         self, from_song: str, to_song: str
