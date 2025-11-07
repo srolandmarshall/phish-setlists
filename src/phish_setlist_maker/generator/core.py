@@ -1021,6 +1021,10 @@ class SetlistGenerator:
                 if not features:
                     logger.warning("⚠️  BIAS FIX: No features found for song: %s (repr: %r)", freq.title, freq.title)
                 if features:
+                    # DEBUG: Log features for common segue songs
+                    if freq.title in ["Mike's Song", "Runaway Jim", "Colonel Forbin's Ascent", "I Am Hydrogen"]:
+                        logger.info("🔍 BIAS FIX: Found features for %s - appearances: %d", freq.title, features.total_appearances)
+
                     # Dampen very common songs to prevent over-representation
                     if features.total_appearances > 500:
                         # Very common: 30% weight (e.g., Mike's Song, YEM, Possum)
