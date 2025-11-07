@@ -484,5 +484,156 @@ class FeatureStore:
         """Get rare segues that could follow this specific track."""
         if self._segue_by_track is None:
             return []
-        
+
         return self._segue_by_track.get(track_id, [])
+
+    def pick_segue_group_for_songs(self, songs: List[str], rng) -> Optional[dict]:
+        """
+        Pick a random segue group that contains all the given songs in sequence.
+
+        This is used to ensure songs from mandatory segues come from the same
+        actual performance, using the specific track IDs from that segue group.
+
+        Args:
+            songs: List of song titles in sequence (e.g., ["Mike's Song", "I Am Hydrogen", "Weekapaug Groove"])
+            rng: Random number generator for selection
+
+        Returns:
+            A synthetic dict with 'tracks' and 'songs' fields representing the complete chain,
+            or None if no matching segue chain found
+        """
+        if not hasattr(self, '_segue_groups') or not self._segue_groups:
+            return None
+
+        if len(songs) == 1:
+            # Single song - just find any segue group containing it
+            candidates = [g for g in self._segue_groups if songs[0] in g.get('songs', [])]
+            if not candidates:
+                return None
+            return rng.choice(candidates)
+
+        elif len(songs) == 2:
+            # Two songs - find segue groups with this exact pair
+            candidates = []
+            for g in self._segue_groups:
+                g_songs = g.get('songs', [])
+                if len(g_songs) >= 2 and g_songs[0] == songs[0] and g_songs[1] == songs[1]:
+                    candidates.append(g)
+            if not candidates:
+                return None
+            return rng.choice(candidates)
+
+        else:
+            # Three+ songs - need to chain multiple segue groups
+            # Example: ["Mike's Song", "I Am Hydrogen", "Weekapaug Groove"]
+            # Step 1: Find all Mike's -> Hydrogen pairs
+            # Step 2: For each, find Hydrogen -> Weekapaug pairs where Hydrogen track matches
+            # Step 3: Build complete chains and pick one randomly
+
+            complete_chains = []
+
+            # Find first pair (e.g., Mike's -> Hydrogen)
+            first_pair_candidates = []
+            for g in self._segue_groups:
+                g_songs = g.get('songs', [])
+                if len(g_songs) >= 2 and g_songs[0] == songs[0] and g_songs[1] == songs[1]:
+                    first_pair_candidates.append(g)
+
+            # For each first pair, try to extend the chain
+            for first_group in first_pair_candidates:
+                first_tracks = first_group.get('tracks', [])
+                if len(first_tracks) < 2:
+                    continue
+
+                # Build chain recursively
+                chain_tracks = list(first_tracks)  # [Mike's track, Hydrogen track]
+                chain_songs = list(songs[:2])  # [Mike's Song, I Am Hydrogen]
+
+                # Try to extend with remaining songs
+                can_extend = True
+                for i in range(2, len(songs)):
+                    # Look for a segue from previous song to next song
+                    prev_song = songs[i-1]
+                    next_song = songs[i]
+                    prev_track_id = chain_tracks[-1]  # Last track in current chain
+
+                    # Find segue groups where prev_song -> next_song and first track matches prev_track_id
+                    found_extension = False
+                    for g in self._segue_groups:
+                        g_songs = g.get('songs', [])
+                        g_tracks = g.get('tracks', [])
+                        if (len(g_songs) >= 2 and g_songs[0] == prev_song and g_songs[1] == next_song
+                            and len(g_tracks) >= 2 and g_tracks[0] == prev_track_id):
+                            # This group extends our chain!
+                            chain_tracks.append(g_tracks[1])
+                            chain_songs.append(next_song)
+                            found_extension = True
+                            break
+
+                    if not found_extension:
+                        can_extend = False
+                        break
+
+                if can_extend and len(chain_songs) == len(songs):
+                    # We successfully built a complete chain!
+                    complete_chains.append({
+                        'tracks': chain_tracks,
+                        'songs': chain_songs,
+                        'segue_id': f"chained_{first_group.get('segue_id')}",
+                        'show_id': first_group.get('show_id'),
+                        'show_date': first_group.get('show_date'),
+                    })
+
+            if not complete_chains:
+                return None
+
+            # Pick a random complete chain
+            return rng.choice(complete_chains)
+
+    def get_segue_chain_tracks(self, starting_track_id: int, song_sequence: List[str]) -> Dict[str, int]:
+        """
+        Given a starting track ID and a sequence of songs, return a mapping of
+        song title -> track_id by following the actual segue chain from that performance.
+
+        This ensures we use the EXACT tracks that seguéd together in that performance.
+
+        Args:
+            starting_track_id: Track ID of the first song (e.g., Mike's Song track 40659)
+            song_sequence: Expected song sequence (e.g., ["Mike's Song", "I Am Hydrogen", "Weekapaug Groove"])
+
+        Returns:
+            Dict mapping song title -> track_id (e.g., {"Mike's Song": 40659, "I Am Hydrogen": 40660, "Weekapaug Groove": 40661})
+        """
+        result = {}
+
+        if not hasattr(self, '_segue_groups') or not self._segue_groups:
+            return result
+
+        # Find the segue group containing the starting track
+        current_track_id = starting_track_id
+
+        for song_title in song_sequence:
+            # Find a segue group where current_track_id is the first track
+            found = False
+            for group in self._segue_groups:
+                tracks = group.get('tracks', [])
+                songs = group.get('songs', [])
+
+                if len(tracks) >= 1 and tracks[0] == current_track_id:
+                    # Found the segue from this track
+                    # Map all songs in this segue to their tracks
+                    for i, song in enumerate(songs):
+                        if i < len(tracks) and song == song_title:
+                            result[song] = tracks[i]
+                            if i + 1 < len(tracks):
+                                current_track_id = tracks[i + 1]
+                            found = True
+                            break
+                    if found:
+                        break
+
+            if not found:
+                # No segue found from current track, stop here
+                break
+
+        return result

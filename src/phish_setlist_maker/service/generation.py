@@ -144,16 +144,62 @@ def _select_track_display(
     feature_store = None,  # Optional FeatureStore for lottery logic
     same_show_segues: bool = False,
     generated_setlist = None,  # GeneratedSetlist for tracking
+    segue_context: Optional[Dict[str, int]] = None,  # NEW: Map song_title -> predetermined track_id
 ) -> Optional[SongDisplay]:
+    # NEW: Check if this song has a predetermined track_id from a segue context
+    # This ensures songs in mandatory segues use tracks from the same actual performance
+    if segue_context and song_title in segue_context:
+        predetermined_track_id = segue_context[song_title]
+        logger.info(
+            "Using predetermined track_id=%s for %s from segue context",
+            predetermined_track_id,
+            song_title
+        )
+
+        # Query this specific track
+        from ..models import Track, SongTrack
+        track_row = db_session.query(
+            Track.id, Track.slug, Track.duration, Track.likes_count,
+            Track.metadata_cache, Track.show_id, Track.set, Track.position
+        ).filter(Track.id == predetermined_track_id).first()
+
+        if not track_row:
+            logger.warning(
+                "Predetermined track_id=%s not found for %s, falling back to random selection",
+                predetermined_track_id,
+                song_title
+            )
+        else:
+            # Get show_date for this track
+            from ..models import Show
+            show = db_session.query(Show).filter(Show.id == track_row.show_id).first()
+            show_date = show.date if show else None
+
+            # Create CandidateTrack for this specific track
+            from .tracks import CandidateTrack
+            selection = CandidateTrack(
+                track_id=predetermined_track_id,
+                slug=track_row.slug,
+                duration=track_row.duration,
+                show_date=show_date,
+                likes_count=track_row.likes_count or 0,
+                metadata_cache=track_row.metadata_cache,
+            )
+
+            # Skip to the metadata resolution and display creation
+            # (rest of function will handle this)
+            candidates = [selection]
+
     # Try to use set-ending tracks if this song is a set closer
-    if is_set_ender and canonical_set:
-        from .tracks import query_set_ending_tracks_for_song
-        candidates = query_set_ending_tracks_for_song(db_session, entry.slug, canonical_set)
-        if not candidates:
-            # Fall back to regular tracks if no set-ending tracks found
+    if not (segue_context and song_title in segue_context):
+        if is_set_ender and canonical_set:
+            from .tracks import query_set_ending_tracks_for_song
+            candidates = query_set_ending_tracks_for_song(db_session, entry.slug, canonical_set)
+            if not candidates:
+                # Fall back to regular tracks if no set-ending tracks found
+                candidates = query_tracks_for_song(db_session, entry.slug)
+        else:
             candidates = query_tracks_for_song(db_session, entry.slug)
-    else:
-        candidates = query_tracks_for_song(db_session, entry.slug)
     
     if not candidates:
         missing[song_title] = missing.get(song_title, 0) + 1
@@ -163,33 +209,84 @@ def _select_track_display(
 
     # NEW: Same-show segue logic
     # If same_show_segues is enabled and this song is part of a mandatory segue,
-    # filter candidates to only include tracks from shows where the complete segue exists
-    if same_show_segues and feature_store and generated_setlist:
-        mandatory_segues = feature_store.get_mandatory_segues(song_title)
-        if mandatory_segues:
-            # Get all songs in the current set to find which segue pattern we're building
-            current_set_songs = []
-            for segment in generated_setlist.sets:
-                current_set_songs.extend(segment.songs)
-            if generated_setlist.encore:
-                current_set_songs.extend(generated_setlist.encore.songs)
+    # we need to pick a complete segue group and use specific track IDs from that group.
+    # This ensures songs follow the ACTUAL segue path from that performance.
+    if same_show_segues and feature_store and generated_setlist and segue_context is not None:
+        # Only proceed if we haven't already picked a track for this song via segue_context
+        if song_title not in segue_context:
+            mandatory_segues = feature_store.get_mandatory_segues(song_title)
+            if mandatory_segues:
+                # Get all songs in the current set to find which segue pattern we're building
+                current_set_songs = []
+                for segment in generated_setlist.sets:
+                    current_set_songs.extend(segment.songs)
+                if generated_setlist.encore:
+                    current_set_songs.extend(generated_setlist.encore.songs)
 
-            # Find a complete segue group from these candidates
-            # Preference: segues where all songs in the pattern are consecutive in current set
-            segue_show_ids = set()
-            for segue in mandatory_segues:
-                segue_tracks = segue.get('tracks', [])
-                if segue_tracks:
-                    # Collect show_ids from tracks in this segue
-                    segue_show_id = segue.get('show_id')
-                    if segue_show_id:
-                        segue_show_ids.add(segue_show_id)
+                # Identify the complete segue pattern from the current set
+                # Example: if current_set_songs contains ["Tweezer", "Mike's Song", "I Am Hydrogen", "Weekapaug Groove"]
+                # and song_title is "Mike's Song", we want to find ["Mike's Song", "I Am Hydrogen", "Weekapaug Groove"]
 
-            if segue_show_ids:
-                # Filter candidates to only include tracks from shows where the segue exists
-                filtered = [c for c in candidates if hasattr(c, 'show_id') and c.show_id in segue_show_ids]
-                if filtered:
-                    candidates = filtered
+                # Find this song's position and look ahead for the rest of the pattern
+                if song_title in current_set_songs:
+                    # Build the complete segue chain by following mandatory_segues
+                    # Example: Mike's Song -> I Am Hydrogen (pair 1) + I Am Hydrogen -> Weekapaug Groove (pair 2)
+                    #          = Mike's Song -> I Am Hydrogen -> Weekapaug Groove (complete chain)
+                    segue_chain = [song_title]
+                    visited = {song_title}
+
+                    # Follow the chain by looking for songs that appear after this one
+                    while True:
+                        last_song = segue_chain[-1]
+                        found_next = False
+
+                        for segue in feature_store.get_mandatory_segues(last_song):
+                            songs_in_segue = segue.get('songs', [])
+                            if len(songs_in_segue) >= 2 and songs_in_segue[0] == last_song:
+                                next_song = songs_in_segue[1]
+                                if next_song not in visited:
+                                    segue_chain.append(next_song)
+                                    visited.add(next_song)
+                                    found_next = True
+                                    break
+
+                        if not found_next:
+                            break
+
+                    # segue_chain now contains the complete pattern (e.g., ["Mike's Song", "I Am Hydrogen", "Weekapaug Groove"])
+                    segue_songs = segue_chain
+
+                    if len(segue_songs) > 1:
+                        # Pick a complete segue group for this pattern
+                        segue_group = feature_store.pick_segue_group_for_songs(segue_songs, rng)
+                        if segue_group:
+                            # Extract track IDs from this specific group
+                            group_tracks = segue_group.get('tracks', [])
+                            group_songs = segue_group.get('songs', [])
+
+                            # Populate segue_context with all songs in this group
+                            for i, song in enumerate(group_songs):
+                                if i < len(group_tracks):
+                                    segue_context[song] = group_tracks[i]
+                                    logger.info(
+                                        "Segue context: %s -> track_id %s (from segue group %s)",
+                                        song,
+                                        group_tracks[i],
+                                        segue_group.get('segue_id')
+                                    )
+
+                            # Now use the predetermined track_id for the current song
+                            if song_title in segue_context:
+                                predetermined_track_id = segue_context[song_title]
+                                # Find the candidate with this track_id
+                                filtered_candidates = [c for c in candidates if c.track_id == predetermined_track_id]
+                                if filtered_candidates:
+                                    candidates = filtered_candidates
+                                    logger.info(
+                                        "Selected track_id=%s for %s from complete segue group",
+                                        predetermined_track_id,
+                                        song_title
+                                    )
 
     # PHASE 4.2: Lottery ticket logic
     # Check if any candidates have rare segues, and prioritize them (weighted by lottery_weight)
@@ -345,6 +442,7 @@ def prepare_playlist_artifacts(
     first_track_url: Optional[str] = None
     injected_segue_tracks: Set[int] = set()  # PHASE 4.2: Track IDs already injected
     segue_notes: List[str] = []  # NEW: Collect notes about segues
+    segue_context: Dict[str, int] = {}  # NEW: Maps song_title -> predetermined track_id for same-show segues
 
     def append_track(song_title: str, is_set_ender: bool = False, canonical_set: Optional[str] = None) -> None:
         nonlocal first_track_url
@@ -373,6 +471,7 @@ def prepare_playlist_artifacts(
                     feature_store=feature_store,  # PHASE 4.2
                     same_show_segues=same_show_segues,
                     generated_setlist=generated_setlist,
+                    segue_context=segue_context,  # NEW: Pass segue context
                 )
                 track_cache[normalized] = display
 
@@ -511,7 +610,8 @@ def prepare_playlist_artifacts(
                     if display.rare_segue_next_tracks and feature_store:
                         from ..models import Track, SongTrack, Song
                         for next_track_id in display.rare_segue_next_tracks:
-                            if next_track_id in injected_segue_tracks:
+                            # Check if already added to THIS section's rows
+                            if any(r.track_id == next_track_id for r in rows):
                                 continue
 
                             track_row = db_session.query(
@@ -579,6 +679,66 @@ def prepare_playlist_artifacts(
                 display = track_cache.get(key)
                 if display:
                     encore_rows.append(display)
+
+                    # If this track has rare segue continuations, add them to the encore
+                    if display.rare_segue_next_tracks and feature_store:
+                        from ..models import Track, SongTrack, Song
+                        for next_track_id in display.rare_segue_next_tracks:
+                            # Check if already added to encore rows
+                            if any(r.track_id == next_track_id for r in encore_rows):
+                                continue
+
+                            track_row = db_session.query(
+                                Track.id, Track.slug, Track.duration, Track.likes_count,
+                                Track.metadata_cache, Track.show_id, Track.set, Track.position
+                            ).filter(Track.id == next_track_id).first()
+                            if not track_row:
+                                continue
+
+                            song_track = db_session.query(SongTrack).filter(SongTrack.track_id == next_track_id).first()
+                            if not song_track:
+                                continue
+                            song = db_session.query(Song).filter(Song.id == song_track.song_id).first()
+                            if not song:
+                                continue
+
+                            from .tracks import CandidateTrack, resolve_track_metadata
+                            candidate = CandidateTrack(
+                                track_id=next_track_id,
+                                slug=track_row.slug,
+                                duration=track_row.duration,
+                                show_date=None,
+                                likes_count=track_row.likes_count or 0,
+                                metadata_cache=track_row.metadata_cache,
+                            )
+
+                            mp3_url, remote_duration, remote_show_date = resolve_track_metadata(
+                                db_session, candidate, song_slug=song.slug, rng=rng, strict=False
+                            )
+
+                            if mp3_url:
+                                duration_seconds = candidate.duration if candidate.duration else remote_duration
+                                if duration_seconds and duration_seconds > 6000:
+                                    duration_seconds = duration_seconds // 1000
+                                show_date_str = remote_show_date or "unknown"
+
+                                continuation_display = SongDisplay(
+                                    title=song.title,
+                                    mp3_url=mp3_url,
+                                    duration_seconds=duration_seconds,
+                                    origin=determine_origin_from_entry(None),
+                                    show_date=show_date_str,
+                                    track_id=next_track_id,
+                                    is_segue=True,
+                                    segue_type="lottery_ticket",
+                                    segue_pattern=display.segue_pattern,
+                                    segue_position=len(encore_rows) + 1,
+                                    segue_group_id=display.segue_group_id,
+                                    historical_occurrences=display.historical_occurrences,
+                                    rarity_score=display.rarity_score,
+                                    likes_count=display.likes_count,
+                                )
+                                encore_rows.append(continuation_display)
                 else:
                     entry = catalog.by_title.get(key)
                     origin = determine_origin_from_entry(entry) if entry else None
