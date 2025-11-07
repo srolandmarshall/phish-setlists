@@ -341,7 +341,7 @@ def _select_track_display(
         mandatory_segues = feature_store.get_mandatory_segues(song_title)
         if mandatory_segues:
             # Check if we've already reached the segue limit for this segment
-            if segues_per_segment and segment_label:
+            if segues_per_segment is not None and segment_label:
                 current_count = segues_per_segment.get(segment_label, 0)
                 if current_count >= max_segues_per_set:
                     logger.info(
@@ -378,7 +378,7 @@ def _select_track_display(
                 continuation_songs = pattern_chain[1:]  # Everything after the current song
 
                 # Increment the segue counter for this segment
-                if segues_per_segment and segment_label:
+                if segues_per_segment is not None and segment_label:
                     segues_per_segment[segment_label] = segues_per_segment.get(segment_label, 0) + 1
                     logger.info(
                         "✅ Injecting mandatory segue for %s (count: %d/%d for %s)",
@@ -445,7 +445,7 @@ def _select_track_display(
     if feature_store and same_show_segues:
         # Check if we've already reached the segue limit for this segment
         can_inject_lottery = True
-        if segues_per_segment and segment_label:
+        if segues_per_segment is not None and segment_label:
             current_count = segues_per_segment.get(segment_label, 0)
             if current_count >= max_segues_per_set:
                 logger.info(
@@ -481,7 +481,7 @@ def _select_track_display(
 
                 if rare_segue_next_tracks:
                     # Increment the segue counter for this segment
-                    if segues_per_segment and segment_label:
+                    if segues_per_segment is not None and segment_label:
                         segues_per_segment[segment_label] = segues_per_segment.get(segment_label, 0) + 1
                         logger.info(
                             "✅ Injecting lottery ticket for %s (count: %d/%d for %s)",
