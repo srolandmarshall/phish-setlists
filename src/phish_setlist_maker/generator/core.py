@@ -338,14 +338,17 @@ class SetlistGenerator:
             metadata_notes.extend(encore_notes)
             encore_segment = SetSegment(label="Encore", songs=encore_songs)
 
-        apply_rules(
-            sets=sets,
-            encore=encore_segment,
-            stats_by_segment=segment_stats_map,
-            eligible_songs=seen_songs,
-            used_songs=used_songs,
-            metadata_notes=metadata_notes,
-        )
+        # Only use old rules-based segue handling when ML features are disabled
+        # When ML features are enabled, segues are handled in generation.py with feature store
+        if not self._use_ml_features:
+            apply_rules(
+                sets=sets,
+                encore=encore_segment,
+                stats_by_segment=segment_stats_map,
+                eligible_songs=seen_songs,
+                used_songs=used_songs,
+                metadata_notes=metadata_notes,
+            )
 
         metadata = GenerationMetadata(
             reference_date=reference,
