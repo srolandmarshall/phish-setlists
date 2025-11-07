@@ -648,11 +648,16 @@ def prepare_playlist_artifacts(
                                     duration_seconds = duration_seconds // 1000
                                 show_date_str = remote_show_date or "unknown"
 
+                                # Try to get origin from catalog
+                                origin_key = normalize_title(song.title)
+                                origin_entry = catalog.by_title.get(origin_key)
+                                origin = determine_origin_from_entry(origin_entry) if origin_entry else None
+
                                 continuation_display = SongDisplay(
                                     title=song.title,
                                     mp3_url=mp3_url,
                                     duration_seconds=duration_seconds,
-                                    origin=determine_origin_from_entry(None),
+                                    origin=origin,
                                     show_date=show_date_str,
                                     track_id=next_track_id,
                                     is_segue=True,
@@ -722,11 +727,16 @@ def prepare_playlist_artifacts(
                                     duration_seconds = duration_seconds // 1000
                                 show_date_str = remote_show_date or "unknown"
 
+                                # Try to get origin from catalog
+                                origin_key = normalize_title(song.title)
+                                origin_entry = catalog.by_title.get(origin_key)
+                                origin = determine_origin_from_entry(origin_entry) if origin_entry else None
+
                                 continuation_display = SongDisplay(
                                     title=song.title,
                                     mp3_url=mp3_url,
                                     duration_seconds=duration_seconds,
-                                    origin=determine_origin_from_entry(None),
+                                    origin=origin,
                                     show_date=show_date_str,
                                     track_id=next_track_id,
                                     is_segue=True,

@@ -21,6 +21,63 @@ from sqlalchemy.orm import Session
 from phish_setlist_maker.db import session_scope
 
 
+def extract_subchains(chains: List[dict], max_length: int = 5, min_total_likes: int = 5) -> List[dict]:
+    """
+    Extract all sub-chains of length 2 to max_length from complete chains.
+
+    This allows us to find interesting sequences like "Light > Manteca -> No Quarter"
+    even if they're part of a longer chain.
+
+    NOTE: For lottery tickets, we filter for chains with segue notation (>).
+    Tracks with ">" in title indicate intentional segues from phish.net.
+
+    For mandatory segues, we keep all consecutive tracks (by position) since
+    we care about the pattern (e.g., Mike's -> Hydrogen -> Weekapaug) regardless
+    of whether every performance had perfect segues.
+
+    Args:
+        chains: Complete chains from extract_complete_chains()
+        max_length: Maximum sub-chain length
+        min_total_likes: Minimum total likes to reduce memory usage
+
+    Returns:
+        List of sub-chain dicts
+    """
+    subchains = []
+
+    for chain in chains:
+        chain_length = len(chain['tracks'])
+
+        # Extract all sub-chains of length 2 to max_length
+        for length in range(2, min(chain_length + 1, max_length + 1)):
+            for start_idx in range(chain_length - length + 1):
+                end_idx = start_idx + length
+
+                # Pre-filter by likes to reduce memory usage
+                likes_subset = chain['likes'][start_idx:end_idx]
+                if sum(likes_subset) < min_total_likes:
+                    continue
+
+                # Pre-filter for segue notation (>) to only capture true segues
+                songs_subset = chain['songs'][start_idx:end_idx]
+                has_segue_notation = any('>' in song for song in songs_subset)
+                if not has_segue_notation:
+                    continue
+
+                subchain = {
+                    'show_id': chain['show_id'],
+                    'show_date': chain['show_date'],
+                    'set_label': chain['set_label'],
+                    'tracks': chain['tracks'][start_idx:end_idx],
+                    'songs': chain['songs'][start_idx:end_idx],
+                    'durations': chain['durations'][start_idx:end_idx],
+                    'likes': likes_subset,
+                }
+                subchains.append(subchain)
+
+    return subchains
+
+
 def extract_complete_chains(session: Session) -> List[dict]:
     """
     Extract complete segue chains by following consecutive tracks.
@@ -211,7 +268,8 @@ def separate_chains_by_frequency(
     pairs: List[dict],
     pair_frequencies: Dict[Tuple[str, str], int],
     threshold: int = 50,
-    max_rare_chain_length: int = 5
+    max_rare_chain_length: int = 5,
+    min_lottery_likes: int = 5
 ) -> Tuple[List[dict], List[dict]]:
     """
     Separate into mandatory pairs (≥threshold) and rare complete chains (<threshold).
@@ -259,11 +317,20 @@ def separate_chains_by_frequency(
 
     # Process complete chains for rare segues (lottery tickets!)
     # Only include chains up to max_rare_chain_length to avoid capturing entire sets
+    # IMPORTANT: Filter for chains with segue notation (>) to ensure true segues
     for chain in chains:
         pattern = tuple(chain['songs'])
         occurrences = chain_frequencies[pattern]
+        total_likes = sum(chain['likes'])
 
-        if occurrences < threshold and len(chain['tracks']) <= max_rare_chain_length:
+        # Check if any track in the chain has ">" segue notation
+        # This filters for intentional segues (not just consecutive plays)
+        has_segue_notation = any('>' in song for song in chain['songs'])
+
+        if (occurrences < threshold and
+            len(chain['tracks']) <= max_rare_chain_length and
+            total_likes >= min_lottery_likes and
+            has_segue_notation):
             # Rare segue - store as complete chain!
             pattern_str = ' -> '.join(chain['songs'])
             segue_id = '_'.join(chain['songs']) + f"_{chain['show_date']}_{chain['set_label']}"
@@ -310,7 +377,8 @@ def build_all_segues(
     session: Session,
     output_dir: Path,
     threshold: int = 50,
-    max_rare_chain_length: int = 5
+    max_rare_chain_length: int = 5,
+    min_lottery_likes: int = 5
 ) -> Tuple[int, int]:
     """
     Build both mandatory and rare segue tables.
@@ -328,20 +396,25 @@ def build_all_segues(
     chains = extract_complete_chains(session)
     print(f"  Found {len(chains)} complete segue chains")
 
+    print(f"Extracting sub-chains (max length {max_rare_chain_length}, min likes {min_lottery_likes})...")
+    subchains = extract_subchains(chains, max_length=max_rare_chain_length, min_total_likes=min_lottery_likes)
+    print(f"  Extracted {len(subchains)} sub-chains (pre-filtered by likes)")
+
     print("Extracting pairs from chains...")
     pairs = extract_pairs_from_chains(chains)
     print(f"  Extracted {len(pairs)} adjacent track pairs")
 
     print("Calculating frequencies...")
     pair_frequencies = calculate_frequencies(pairs)
-    chain_frequencies = calculate_chain_pattern_frequencies(chains)
+    subchain_frequencies = calculate_chain_pattern_frequencies(subchains)
     print(f"  Found {len(pair_frequencies)} unique song pairs")
-    print(f"  Found {len(chain_frequencies)} unique chain patterns")
+    print(f"  Found {len(subchain_frequencies)} unique sub-chain patterns")
 
-    print(f"Separating by frequency (threshold={threshold}, max_rare_chain_length={max_rare_chain_length})...")
+    print(f"Separating by frequency (threshold={threshold}, min_lottery_likes={min_lottery_likes})...")
     mandatory, rare = separate_chains_by_frequency(
-        chains, chain_frequencies, pairs, pair_frequencies,
-        threshold=threshold, max_rare_chain_length=max_rare_chain_length
+        subchains, subchain_frequencies, pairs, pair_frequencies,
+        threshold=threshold, max_rare_chain_length=max_rare_chain_length,
+        min_lottery_likes=min_lottery_likes
     )
     print(f"  Mandatory segues (pairs): {len(mandatory)}")
     print(f"  Rare segues (complete chains): {len(rare)}")
