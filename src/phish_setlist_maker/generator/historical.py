@@ -11,7 +11,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy.sql import Select
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..constants import (
@@ -21,7 +21,7 @@ from ..constants import (
     SET_ALIASES,
     THREE_SET_DURATION_OVERRIDES,
 )
-from ..models import Show, Track
+from ..models import Show, Song, SongTrack, Track
 
 
 @dataclass(frozen=True)
@@ -134,9 +134,15 @@ def song_frequencies_by_set(
         year=year,
     ).subquery()
 
+    # Use canonical Song.title (falling back to Track.title) to match feature store keys
     track_stmt = (
-        select(Track.title, Track.set)
+        select(
+            func.coalesce(Song.title, Track.title).label("effective_title"),
+            Track.set
+        )
         .join(show_ids_subquery, Track.show_id == show_ids_subquery.c.id)
+        .outerjoin(SongTrack, SongTrack.track_id == Track.id)
+        .outerjoin(Song, Song.id == SongTrack.song_id)
     )
 
     counters: Dict[str, Counter] = {}
