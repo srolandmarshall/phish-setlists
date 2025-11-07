@@ -1006,19 +1006,50 @@ class SetlistGenerator:
             if not weighted_candidates:
                 return None
 
-        # NEW: Apply frequency caps to rare songs to prevent overuse
+        # NEW: Apply frequency caps to prevent overuse of both rare AND common songs
         if self._use_ml_features and self._feature_store:
             for idx, (freq, weight) in enumerate(weighted_candidates):
                 features = self._feature_store.get_song_features(freq.title)
-                if features and features.total_appearances < 50:
+                if features:
+                    # Dampen very common songs to prevent over-representation
+                    if features.total_appearances > 500:
+                        # Very common: 30% weight (e.g., Mike's Song, YEM, Possum)
+                        capped_weight = weight * 0.3
+                    elif features.total_appearances > 300:
+                        # Common: 50% weight (e.g., Runaway Jim, I Am Hydrogen)
+                        capped_weight = weight * 0.5
                     # Scale down rare songs (historical count < 50)
-                    if features.total_appearances < 30:
+                    elif features.total_appearances < 30:
                         # Very rare: 25% weight
                         capped_weight = weight * 0.25
-                    else:
+                    elif features.total_appearances < 50:
                         # Rare: 50% weight
                         capped_weight = weight * 0.5
+                    else:
+                        # Normal frequency (30-500): no adjustment
+                        capped_weight = weight
                     weighted_candidates[idx] = (freq, capped_weight)
+
+        # NEW: Apply segue trigger penalty to account for pattern expansion
+        # Songs with mandatory segues will add multiple songs to the set, so reduce their selection probability
+        if self._use_ml_features and self._feature_store:
+            for idx, (freq, weight) in enumerate(weighted_candidates):
+                mandatory_segues = self._feature_store.get_mandatory_segues(freq.title)
+                if mandatory_segues:
+                    # Calculate average pattern length this song triggers
+                    pattern_lengths = [len(seg.get('songs', [])) for seg in mandatory_segues]
+                    avg_pattern_length = sum(pattern_lengths) / len(pattern_lengths) if pattern_lengths else 1
+
+                    if avg_pattern_length > 1:
+                        # Apply penalty proportional to how many songs will be added
+                        # Example: 3-song pattern (Mike's > Hydrogen > Weekapaug) gets 0.33x penalty
+                        penalty = 1.0 / avg_pattern_length
+                        penalized_weight = weight * penalty
+                        weighted_candidates[idx] = (freq, penalized_weight)
+                        logger.debug(
+                            "Applying segue penalty to %s (pattern length %.1f): %.2f → %.2f",
+                            freq.title, avg_pattern_length, weight, penalized_weight
+                        )
 
         # Apply ML placement probability adjustments
         if self._use_ml_features and self._feature_store and target_set:
