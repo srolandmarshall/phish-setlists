@@ -210,13 +210,17 @@ def separate_chains_by_frequency(
     chain_frequencies: Dict[Tuple[str, ...], int],
     pairs: List[dict],
     pair_frequencies: Dict[Tuple[str, str], int],
-    threshold: int = 50
+    threshold: int = 50,
+    max_rare_chain_length: int = 5
 ) -> Tuple[List[dict], List[dict]]:
     """
     Separate into mandatory pairs (≥threshold) and rare complete chains (<threshold).
 
     Mandatory segues are stored as pairs for flexibility in generation.
     Rare segues are stored as complete chains to preserve lottery ticket sequences.
+
+    Args:
+        max_rare_chain_length: Maximum songs in a rare chain (to avoid capturing entire sets)
 
     Returns (mandatory_records, rare_records).
     """
@@ -254,11 +258,12 @@ def separate_chains_by_frequency(
             mandatory_records.append(record)
 
     # Process complete chains for rare segues (lottery tickets!)
+    # Only include chains up to max_rare_chain_length to avoid capturing entire sets
     for chain in chains:
         pattern = tuple(chain['songs'])
         occurrences = chain_frequencies[pattern]
 
-        if occurrences < threshold:
+        if occurrences < threshold and len(chain['tracks']) <= max_rare_chain_length:
             # Rare segue - store as complete chain!
             pattern_str = ' -> '.join(chain['songs'])
             segue_id = '_'.join(chain['songs']) + f"_{chain['show_date']}_{chain['set_label']}"
@@ -304,13 +309,18 @@ def build_dataframe(records: List[dict]) -> pd.DataFrame:
 def build_all_segues(
     session: Session,
     output_dir: Path,
-    threshold: int = 50
+    threshold: int = 50,
+    max_rare_chain_length: int = 5
 ) -> Tuple[int, int]:
     """
     Build both mandatory and rare segue tables.
 
     Mandatory segues (≥threshold): Stored as pairs for generation flexibility
     Rare segues (<threshold): Stored as complete chains for lottery tickets!
+
+    Args:
+        threshold: Minimum occurrences for mandatory segues
+        max_rare_chain_length: Maximum length for rare segue chains (to avoid capturing entire sets)
 
     Returns (num_mandatory, num_rare).
     """
@@ -328,9 +338,10 @@ def build_all_segues(
     print(f"  Found {len(pair_frequencies)} unique song pairs")
     print(f"  Found {len(chain_frequencies)} unique chain patterns")
 
-    print(f"Separating by frequency (threshold={threshold})...")
+    print(f"Separating by frequency (threshold={threshold}, max_rare_chain_length={max_rare_chain_length})...")
     mandatory, rare = separate_chains_by_frequency(
-        chains, chain_frequencies, pairs, pair_frequencies, threshold=threshold
+        chains, chain_frequencies, pairs, pair_frequencies,
+        threshold=threshold, max_rare_chain_length=max_rare_chain_length
     )
     print(f"  Mandatory segues (pairs): {len(mandatory)}")
     print(f"  Rare segues (complete chains): {len(rare)}")
