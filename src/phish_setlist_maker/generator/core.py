@@ -1011,11 +1011,15 @@ class SetlistGenerator:
 
         # NEW: Apply frequency caps to prevent overuse of both rare AND common songs
         if self._use_ml_features and self._feature_store:
-            logger.info("🔍 BIAS FIX: Applying frequency caps (use_ml=%s, store=%s)", self._use_ml_features, self._feature_store is not None)
+            logger.info("🔍 BIAS FIX: Applying frequency caps (use_ml=%s, store=%s, candidates=%d)",
+                       self._use_ml_features, self._feature_store is not None, len(weighted_candidates))
+            # DEBUG: Show first few songs being checked
+            if weighted_candidates:
+                logger.info("🔍 BIAS FIX: Sample songs to check: %s", [freq.title for freq, _ in weighted_candidates[:5]])
             for idx, (freq, weight) in enumerate(weighted_candidates):
                 features = self._feature_store.get_song_features(freq.title)
                 if not features:
-                    logger.warning("⚠️  BIAS FIX: No features found for song: %s", freq.title)
+                    logger.warning("⚠️  BIAS FIX: No features found for song: %s (repr: %r)", freq.title, freq.title)
                 if features:
                     # Dampen very common songs to prevent over-representation
                     if features.total_appearances > 500:
