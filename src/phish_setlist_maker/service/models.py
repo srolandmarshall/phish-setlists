@@ -20,6 +20,8 @@ class SongDisplay:
     show_date: Optional[str] = None
     track_id: Optional[int] = None
     rare_segue_next_tracks: Optional[List[int]] = None  # PHASE 4.2: track_ids of rare segue continuations
+    mandatory_next_tracks: Optional[List[int]] = None  # Track IDs for mandatory pattern continuations (or empty list for random)
+    mandatory_pattern_songs: Optional[List[str]] = None  # Song titles for mandatory pattern (e.g., ["I Am Hydrogen", "Weekapaug Groove"])
     # Segue metadata for API response
     is_segue: bool = False
     segue_type: Optional[str] = None  # "rare" or "lottery_ticket"

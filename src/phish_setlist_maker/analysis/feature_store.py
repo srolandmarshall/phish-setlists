@@ -590,6 +590,38 @@ class FeatureStore:
             # Pick a random complete chain
             return rng.choice(complete_chains)
 
+    def get_following_tracks_from_show(self, session, track_id: int, max_tracks: int = 5) -> List[dict]:
+        """
+        Query database to find what tracks actually followed this track in its show.
+
+        Args:
+            session: SQLAlchemy session
+            track_id: Track ID to start from
+            max_tracks: Maximum number of following tracks to return
+
+        Returns list of dicts with: track_id, title, position
+        """
+        from ..models import Track
+        from sqlalchemy import and_
+
+        # Get the source track info
+        source_track = session.query(Track).filter(Track.id == track_id).first()
+        if not source_track:
+            return []
+
+        # Query for subsequent tracks in same show/set
+        following = session.query(
+            Track.id, Track.title, Track.position
+        ).filter(
+            and_(
+                Track.show_id == source_track.show_id,
+                Track.set == source_track.set,
+                Track.position > source_track.position
+            )
+        ).order_by(Track.position).limit(max_tracks).all()
+
+        return [{'track_id': t.id, 'title': t.title, 'position': t.position} for t in following]
+
     def get_segue_chain_tracks(self, starting_track_id: int, song_sequence: List[str]) -> Dict[str, int]:
         """
         Given a starting track ID and a sequence of songs, return a mapping of
