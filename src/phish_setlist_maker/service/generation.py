@@ -98,6 +98,7 @@ class GenerationRequest:
     ml_transition_bonus: float = 0.1
     jamminess: Optional[float] = None  # 0.0 = tight, 0.5 = balanced, 1.0 = max jam
     same_show_segues: bool = False  # Ensure segues from same show performance
+    max_segues_per_set: int = 2  # Maximum segue patterns (mandatory + lottery) per set
 
 
 def infer_default_era(year: Optional[int]) -> Optional[str]:
@@ -146,6 +147,9 @@ def _select_track_display(
     generated_setlist = None,  # GeneratedSetlist for tracking
     segue_context: Optional[Dict[str, int]] = None,  # NEW: Map song_title -> predetermined track_id
     jamminess: Optional[float] = None,  # NEW: 0.0-1.0 scale for lottery ticket probability
+    segues_per_segment: Optional[Dict[str, int]] = None,  # NEW: Track segue patterns per segment
+    max_segues_per_set: int = 2,  # NEW: Maximum segue patterns per set
+    segment_label: Optional[str] = None,  # NEW: Segment label for tracking
 ) -> Optional[SongDisplay]:
     # NEW: Check if this song has a predetermined track_id from a segue context
     # This ensures songs in mandatory segues use tracks from the same actual performance
@@ -336,6 +340,17 @@ def _select_track_display(
     if feature_store:
         mandatory_segues = feature_store.get_mandatory_segues(song_title)
         if mandatory_segues:
+            # Check if we've already reached the segue limit for this segment
+            if segues_per_segment and segment_label:
+                current_count = segues_per_segment.get(segment_label, 0)
+                if current_count >= max_segues_per_set:
+                    logger.info(
+                        "⏭️  Skipping mandatory segue for %s - already at limit (%d/%d) for %s",
+                        song_title, current_count, max_segues_per_set, segment_label
+                    )
+                    mandatory_segues = []  # Clear to skip processing below
+
+        if mandatory_segues:
             # This song has mandatory patterns (e.g., Mike's Song)
             # Build the expected continuation pattern
             # Find the complete chain by following mandatory segues
@@ -361,6 +376,14 @@ def _select_track_display(
             # pattern_chain now contains the expected songs (e.g., ["Mike's Song", "I Am Hydrogen", "Weekapaug Groove"])
             if len(pattern_chain) > 1:
                 continuation_songs = pattern_chain[1:]  # Everything after the current song
+
+                # Increment the segue counter for this segment
+                if segues_per_segment and segment_label:
+                    segues_per_segment[segment_label] = segues_per_segment.get(segment_label, 0) + 1
+                    logger.info(
+                        "✅ Injecting mandatory segue for %s (count: %d/%d for %s)",
+                        song_title, segues_per_segment[segment_label], max_segues_per_set, segment_label
+                    )
 
                 # Check what actually followed this track in its show
                 if same_show_segues:
@@ -420,7 +443,18 @@ def _select_track_display(
     # IMPORTANT: Lottery tickets only work with same_show_segues enabled
     # Otherwise continuation tracks would be from different shows, breaking authenticity
     if feature_store and same_show_segues:
-        rare_segues = feature_store.get_rare_segues_from_track(selection.track_id)
+        # Check if we've already reached the segue limit for this segment
+        can_inject_lottery = True
+        if segues_per_segment and segment_label:
+            current_count = segues_per_segment.get(segment_label, 0)
+            if current_count >= max_segues_per_set:
+                logger.info(
+                    "⏭️  Skipping lottery ticket check for %s - already at limit (%d/%d) for %s",
+                    song_title, current_count, max_segues_per_set, segment_label
+                )
+                can_inject_lottery = False
+
+        rare_segues = feature_store.get_rare_segues_from_track(selection.track_id) if can_inject_lottery else []
         if rare_segues:
             # Lottery ticket: probability scales with jamminess (0-10%)
             # jamminess=0.0 → 0%, jamminess=0.5 → 5%, jamminess=1.0 → 10%
@@ -446,6 +480,14 @@ def _select_track_display(
                             break  # Stop at first tails
 
                 if rare_segue_next_tracks:
+                    # Increment the segue counter for this segment
+                    if segues_per_segment and segment_label:
+                        segues_per_segment[segment_label] = segues_per_segment.get(segment_label, 0) + 1
+                        logger.info(
+                            "✅ Injecting lottery ticket for %s (count: %d/%d for %s)",
+                            song_title, segues_per_segment[segment_label], max_segues_per_set, segment_label
+                        )
+
                     # Populate segue metadata for API response
                     is_segue = True
                     segue_type = "lottery_ticket"
@@ -524,6 +566,7 @@ def prepare_playlist_artifacts(
     generated_setlist = None,  # GeneratedSetlist for tracking segues
     jamminess: Optional[float] = None,  # NEW: 0.0-1.0 scale for lottery ticket probability
     set_lengths: Optional[Dict[str, int]] = None,  # NEW: Target durations for each segment
+    max_segues_per_set: int = 2,  # NEW: Maximum segue patterns (mandatory + lottery) per set
 ) -> PlaylistArtifacts:
     track_cache: Dict[str, Optional[SongDisplay]] = {}
     missing: Dict[str, int] = {}
@@ -534,6 +577,7 @@ def prepare_playlist_artifacts(
     segue_context: Dict[str, int] = {}  # NEW: Maps song_title -> predetermined track_id for same-show segues
     songs_to_skip: Set[Tuple[str, str]] = set()  # NEW: (segment_label, song_title) tuples to skip for lottery compensation
     mandatory_injected_songs: Set[Tuple[str, str]] = set()  # NEW: (segment_label, song_title) tuples already injected as mandatory continuations
+    segues_per_segment: Dict[str, int] = {}  # NEW: Track segue patterns injected per segment
 
     def append_track(song_title: str, is_set_ender: bool = False, canonical_set: Optional[str] = None, segment_label: Optional[str] = None) -> None:
         nonlocal first_track_url
@@ -564,6 +608,9 @@ def prepare_playlist_artifacts(
                     generated_setlist=generated_setlist,
                     segue_context=segue_context,  # NEW: Pass segue context
                     jamminess=jamminess,  # NEW: Pass jamminess for lottery probability
+                    segues_per_segment=segues_per_segment,  # NEW: Pass segue counter
+                    max_segues_per_set=max_segues_per_set,  # NEW: Pass segue limit
+                    segment_label=segment_label,  # NEW: Pass segment label
                 )
                 track_cache[normalized] = display
 
@@ -1397,6 +1444,7 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
             generated_setlist=generated,  # For tracking segues in metadata
             jamminess=request.jamminess,  # NEW: Pass jamminess for lottery probability
             set_lengths=set_lengths,  # NEW: Pass target durations for 15% threshold check
+            max_segues_per_set=request.max_segues_per_set,  # NEW: Pass segue limit
         )
 
     track_lookup: Dict[str, SongDisplay] = {}

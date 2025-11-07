@@ -123,6 +123,12 @@ class GenerateRequestModel(BaseModel):
         default=False,
         description="Ensure songs in mandatory segues come from the same show performance. Also enables lottery ticket injection (5% chance) for rare historical segues."
     )
+    max_segues_per_set: int = Field(
+        default=2,
+        ge=0,
+        le=10,
+        description="Maximum number of segue patterns (mandatory + lottery combined) per set. Prevents sets from becoming too long due to excessive segue injection."
+    )
 
     @field_validator("set_lengths")
     @classmethod
