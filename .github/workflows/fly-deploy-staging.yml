@@ -1,0 +1,24 @@
+# Continuous deployment for the staging API app
+
+name: Fly Deploy (staging)
+on:
+  push:
+    branches:
+      - staging
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'notebooks/**'
+jobs:
+  deploy-staging:
+    name: Deploy staging app
+    runs-on: ubuntu-latest
+    concurrency: deploy-group-staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only --config fly.staging.toml --app phish-setlist-staging
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

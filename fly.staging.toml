@@ -1,0 +1,22 @@
+# fly.staging.toml
+#
+# Configuration for the staging API deployment. Keeps prod config (fly.toml)
+# untouched while letting GitHub Actions deploy to a separate Fly app.
+
+app = 'phish-setlist-staging'
+primary_region = 'iad'
+
+[build]
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
