@@ -69,6 +69,7 @@ app.add_middleware(
         "http://localhost:5173",
         "https://inphinite.sammarshall.us",
         "https://inphinite-phront-end.fly.dev",
+        "https://inphinite-staging.fly.dev",
     ],
     allow_credentials=True,
     allow_methods=["*"],
