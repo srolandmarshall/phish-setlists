@@ -1253,11 +1253,13 @@ class SetlistGenerator:
         if not candidates:
             return None
         
-        # Weight by ending_probability * ending_count (favor both high probability AND frequency)
+        # Weight by ending_probability scaled by support so 1/1 entries don't dominate
         weighted_candidates: List[Tuple[str, float]] = []
+        smoothing = 10.0  # pseudo-count to dampen low-support rows
         for ender in candidates:
-            # Use ending_probability as primary weight, scaled by count for tie-breaking
-            weight = ender.ending_probability * (1.0 + (ender.ending_count / 100.0))
+            support = float(max(ender.ending_count, 0))
+            support_weight = support / (support + smoothing)
+            weight = ender.ending_probability * support_weight
             weighted_candidates.append((ender.song_name, weight))
         
         total_weight = sum(w for _, w in weighted_candidates)
