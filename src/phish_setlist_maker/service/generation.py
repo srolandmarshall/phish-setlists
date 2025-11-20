@@ -661,6 +661,37 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
     playlist_artifacts: Optional[PlaylistArtifacts] = None
     if request.include_playlist or request.prefetch_track_metadata:
         catalog = build_song_catalog(session)
+
+        # PERFORMANCE: Prefetch track metadata in parallel before sequential processing
+        # Collect all songs that will need tracks
+        all_songs = []
+        for segment in generated.sets:
+            all_songs.extend(segment.songs)
+        if generated.encore:
+            all_songs.extend(generated.encore.songs)
+
+        # Get one candidate track per song for prefetching
+        from .tracks import query_tracks_for_song, batch_prefetch_track_metadata
+        prefetch_candidates = []
+        for song_title in all_songs:
+            normalized = normalize_title(song_title)
+            entry = catalog.by_title.get(normalized)
+            if entry:
+                # Get the top candidate (by likes_count) for this song
+                candidates = query_tracks_for_song(session, entry.slug, limit=1)
+                if candidates:
+                    prefetch_candidates.append((candidates[0], entry.slug))
+
+        # Batch prefetch metadata for all tracks in parallel (rate-limited)
+        if prefetch_candidates:
+            logger.info("Prefetching metadata for %d tracks before generation", len(prefetch_candidates))
+            batch_prefetch_track_metadata(
+                session,
+                prefetch_candidates,
+                max_workers=5,  # 5 concurrent requests to be nice to phish.in
+                delay_between_requests=0.2,  # 200ms = max 5 req/sec
+            )
+
         playlist_artifacts = prepare_playlist_artifacts(
             session,
             generated.sets,

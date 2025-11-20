@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from random import Random
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import requests
 from sqlalchemy import select, update
@@ -274,6 +276,81 @@ def _update_track_cache(
         # Skip cache update if database schema doesn't match
         # (e.g., missing metadata_cache column or other schema issues)
         pass
+
+
+def batch_prefetch_track_metadata(
+    session: Session,
+    candidates: List[Tuple[CandidateTrack, str]],
+    *,
+    max_workers: int = 5,
+    delay_between_requests: float = 0.2,
+) -> None:
+    """
+    Prefetch metadata for multiple tracks in parallel with rate limiting.
+
+    Args:
+        session: Database session for cache updates
+        candidates: List of (CandidateTrack, song_slug) tuples
+        max_workers: Max concurrent requests (default 5 to be nice to phish.in)
+        delay_between_requests: Seconds to wait between requests (default 0.2s = 5 req/sec)
+    """
+    # Filter to only uncached tracks
+    to_fetch = []
+    for candidate, song_slug in candidates:
+        cache = candidate.metadata_cache or {}
+        if not cache or not _cached_metadata_valid(cache):
+            to_fetch.append((candidate, song_slug))
+
+    if not to_fetch:
+        logger.info("All %d tracks already cached, skipping prefetch", len(candidates))
+        return
+
+    logger.info("Prefetching metadata for %d uncached tracks (parallel, rate-limited)", len(to_fetch))
+    start_time = time.time()
+
+    def fetch_one(candidate: CandidateTrack, slug: str) -> Tuple[CandidateTrack, Optional[str], Optional[int], Optional[str]]:
+        """Fetch metadata for a single track with rate limiting."""
+        time.sleep(delay_between_requests)  # Rate limit: wait before each request
+        try:
+            mp3_url, duration, show_date = fetch_remote_track_metadata(
+                track_id=candidate.track_id,
+                song_slug=slug,
+                rng=Random(),  # Not used for selection here
+                strict=False,
+            )
+            return candidate, mp3_url, duration, show_date
+        except Exception as e:
+            logger.warning("Failed to fetch metadata for track_id=%s: %s", candidate.track_id, e)
+            return candidate, None, None, None
+
+    # Fetch in parallel with limited concurrency
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(fetch_one, candidate, slug): (candidate, slug)
+            for candidate, slug in to_fetch
+        }
+
+        fetched_count = 0
+        for future in as_completed(futures):
+            candidate, mp3_url, duration, show_date = future.result()
+            if mp3_url:
+                _update_track_cache(
+                    session,
+                    candidate.track_id,
+                    mp3_url=mp3_url,
+                    duration=duration,
+                    show_date=show_date,
+                )
+                fetched_count += 1
+
+    elapsed = time.time() - start_time
+    logger.info(
+        "Prefetched %d/%d tracks in %.2fs (avg %.2fs/track)",
+        fetched_count,
+        len(to_fetch),
+        elapsed,
+        elapsed / len(to_fetch) if to_fetch else 0,
+    )
 
 
 def resolve_track_metadata(
