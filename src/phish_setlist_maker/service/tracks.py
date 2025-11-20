@@ -221,10 +221,25 @@ def fetch_remote_track_metadata(
     return mp3_url, duration_seconds, show_date
 
 
-def _cached_metadata_valid(cache: dict) -> bool:
+def _cached_metadata_valid(cache: dict, ttl_hours: int = 24) -> bool:
+    """Check if cached metadata is valid. Uses TTL instead of HEAD requests for performance."""
     url = cache.get("mp3_url")
     if not url:
         return False
+
+    # Check cache age - trust cached data for ttl_hours without making HTTP requests
+    fetched_at_str = cache.get("fetched_at")
+    if fetched_at_str:
+        try:
+            fetched_at = datetime.fromisoformat(fetched_at_str)
+            age_hours = (datetime.now(timezone.utc) - fetched_at).total_seconds() / 3600
+            if age_hours < ttl_hours:
+                # Cache is fresh, trust it without validation
+                return True
+        except (ValueError, TypeError):
+            pass  # Fall through to validation if timestamp is invalid
+
+    # Cache is old or missing timestamp - validate with HEAD request
     try:
         head_resp = requests.head(url, timeout=5, allow_redirects=True)
         if head_resp.status_code >= 400:
