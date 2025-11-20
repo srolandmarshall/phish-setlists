@@ -215,6 +215,9 @@ See full ML roadmap: [`AGENTS-ml.md`](AGENTS-ml.md)
 # Run all tests
 poetry run pytest
 
+# Run fast subset (skips slow generator integration tests)
+poetry run pytest -m "not slow"
+
 # Run with coverage
 poetry run pytest --cov=phish_setlist_maker
 

@@ -29,6 +29,8 @@ from phish_setlist_maker.service.generation import _select_track_display
 from phish_setlist_maker.service.catalog import SongCatalogEntry
 from phish_setlist_maker.generator.core import GeneratedSetlist, SetSegment, GenerationMetadata
 
+pytestmark = pytest.mark.slow
+
 
 def mock_resolve_track_metadata(session, candidate, song_slug=None, rng=None, strict=False) -> Tuple[str, int, str]:
     """Mock resolve_track_metadata to avoid hitting phish.in API."""

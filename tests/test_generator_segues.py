@@ -7,11 +7,15 @@ from datetime import date, datetime
 from random import Random
 from typing import Dict, Iterable, List, Sequence, Tuple
 
+import pytest
+
 from phish_setlist_maker.constants import DEFAULT_SET_LENGTHS
 from phish_setlist_maker.generator.core import SetlistGenerator
 from phish_setlist_maker.models.show import Show
 from phish_setlist_maker.models.track import Track
 from sqlalchemy.orm import Session
+
+pytestmark = pytest.mark.slow
 
 
 def _seed_show(
