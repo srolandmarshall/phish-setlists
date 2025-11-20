@@ -12,7 +12,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 from ..analysis.feature_store import FeatureStore
 from ..constants import (
