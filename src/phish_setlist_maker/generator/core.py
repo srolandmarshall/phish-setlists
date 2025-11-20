@@ -703,6 +703,157 @@ class SetlistGenerator:
             self._get_or_cache_features(freq.title, target_set, cache)
         return cache
 
+    def _adjust_candidate_weights(
+        self,
+        weighted_candidates: List[Tuple[SongFrequency, float]],
+        *,
+        previous_song: Optional[str],
+        adjacency_map: Optional[Dict[str, Dict[str, int]]],
+        target_set: Optional[str],
+        feature_bundles: Dict[str, Dict[str, Any]],
+        feature_cache: Optional[Dict[str, Dict[str, Any]]],
+    ) -> List[Tuple[SongFrequency, float]]:
+        """Apply all candidate weight adjustments in a single pass."""
+
+        # Pre-compute adjacency normalization for this previous song (if any)
+        filtered_neighbors: Dict[str, int] = {}
+        max_neighbor = 0
+        if previous_song and adjacency_map:
+            neighbors = adjacency_map.get(previous_song)
+            if neighbors:
+                filtered_neighbors = {
+                    song: count
+                    for song, count in neighbors.items()
+                    if count >= self._adjacency_min_support
+                }
+                if filtered_neighbors:
+                    max_neighbor = max(filtered_neighbors.values())
+
+        mandatory_next: Set[str] = set()
+        if self._use_ml_features and self._feature_store and previous_song:
+            mandatory_next = self._feature_store.get_mandatory_next_songs(previous_song)
+
+        adjusted: List[Tuple[SongFrequency, float]] = []
+
+        if self._use_ml_features and self._feature_store:
+            logger.info(
+                "🔍 BIAS FIX: Applying frequency caps (use_ml=%s, store=%s, candidates=%d)",
+                self._use_ml_features,
+                self._feature_store is not None,
+                len(weighted_candidates),
+            )
+            if weighted_candidates:
+                logger.info(
+                    "🔍 BIAS FIX: Sample songs to check: %s",
+                    [candidate.title for candidate, _ in weighted_candidates[:5]],
+                )
+
+        for freq, weight in weighted_candidates:
+            adjusted_weight = weight
+
+            if self._use_ml_features and self._feature_store:
+                bundle = feature_bundles.get(freq.title) or self._get_or_cache_features(
+                    freq.title,
+                    target_set,
+                    feature_cache,
+                )
+                features = bundle["features"]
+                mandatory_segues = bundle["mandatory_segues"]
+                placement_prob = bundle["placement_prob"]
+
+                logger.info(
+                    "🔍 BIAS FIX: Applying frequency caps (use_ml=%s, store=%s, candidates=%d)",
+                    self._use_ml_features,
+                    self._feature_store is not None,
+                    len(weighted_candidates),
+                )
+                if weighted_candidates:
+                    logger.info(
+                        "🔍 BIAS FIX: Sample songs to check: %s",
+                        [candidate.title for candidate, _ in weighted_candidates[:5]],
+                    )
+
+                if not features:
+                    logger.warning(
+                        "⚠️  BIAS FIX: No features found for song: %s (repr: %r)",
+                        freq.title,
+                        freq.title,
+                    )
+                if features:
+                    if freq.title in ["Mike's Song", "Runaway Jim", "Colonel Forbin's Ascent", "I Am Hydrogen"]:
+                        logger.info(
+                            "🔍 BIAS FIX: Found features for %s - appearances: %d",
+                            freq.title,
+                            features.total_appearances,
+                        )
+
+                    if features.total_appearances > 500:
+                        capped_weight = adjusted_weight * 0.3
+                        logger.info(
+                            "⬇️  BIAS FIX: Reducing %s (>500 appearances): %.2f → %.2f",
+                            freq.title,
+                            adjusted_weight,
+                            capped_weight,
+                        )
+                        adjusted_weight = capped_weight
+                    elif features.total_appearances > 300:
+                        capped_weight = adjusted_weight * 0.5
+                        logger.info(
+                            "⬇️  BIAS FIX: Reducing %s (>300 appearances): %.2f → %.2f",
+                            freq.title,
+                            adjusted_weight,
+                            capped_weight,
+                        )
+                        adjusted_weight = capped_weight
+                    elif features.total_appearances < 30:
+                        adjusted_weight *= 0.25
+                    elif features.total_appearances < 50:
+                        adjusted_weight *= 0.5
+
+                if mandatory_segues:
+                    pattern_lengths = [len(seg.get('songs', [])) for seg in mandatory_segues]
+                    avg_pattern_length = sum(pattern_lengths) / len(pattern_lengths) if pattern_lengths else 1
+
+                    if avg_pattern_length > 1:
+                        penalty = 1.0 / avg_pattern_length
+                        penalized_weight = adjusted_weight * penalty
+                        adjusted_weight = penalized_weight
+                        logger.debug(
+                            "Applying segue penalty to %s (pattern length %.1f): %.2f → %.2f",
+                            freq.title,
+                            avg_pattern_length,
+                            weight,
+                            penalized_weight,
+                        )
+
+                if placement_prob > 0 and target_set:
+                    adjusted_weight = (
+                        adjusted_weight * (1 - self._ml_placement_weight)
+                        + placement_prob * self._ml_placement_weight
+                    )
+
+            if previous_song and max_neighbor > 0:
+                neighbor_weight = filtered_neighbors.get(freq.title)
+                if neighbor_weight:
+                    normalized = neighbor_weight / max_neighbor
+                    boost = 1.0 + self._adjacency_bonus * normalized
+                    adjusted_weight *= boost
+
+            if self._use_ml_features and self._feature_store and previous_song:
+                transition = self._feature_store.get_transition_lift(previous_song, freq.title)
+                if transition and transition.lift > 2.0:  # Only boost strong transitions
+                    normalized_lift = min((transition.lift - 2.0) / 8.0, 1.0)
+                    boost = 1.0 + self._ml_transition_bonus * normalized_lift
+                    adjusted_weight *= boost
+
+                if mandatory_next and freq.title in mandatory_next:
+                    adjusted_weight *= 3.0
+
+            adjusted.append((freq, adjusted_weight))
+
+        adjusted.sort(key=lambda x: -x[1])
+        return adjusted
+
     def _select_with_duration_budget(
         self,
         *,
@@ -1138,121 +1289,14 @@ class SetlistGenerator:
             if not weighted_candidates:
                 return None
 
-        # NEW: Apply frequency caps to prevent overuse of both rare AND common songs
-        if self._use_ml_features and self._feature_store:
-            logger.info("🔍 BIAS FIX: Applying frequency caps (use_ml=%s, store=%s, candidates=%d)",
-                       self._use_ml_features, self._feature_store is not None, len(weighted_candidates))
-            # DEBUG: Show first few songs being checked
-            if weighted_candidates:
-                logger.info("🔍 BIAS FIX: Sample songs to check: %s", [freq.title for freq, _ in weighted_candidates[:5]])
-            for idx, (freq, weight) in enumerate(weighted_candidates):
-                bundle = feature_bundles.get(freq.title) or self._get_or_cache_features(
-                    freq.title, target_set, feature_cache
-                )
-                features = bundle["features"]
-                if not features:
-                    logger.warning("⚠️  BIAS FIX: No features found for song: %s (repr: %r)", freq.title, freq.title)
-                if features:
-                    # DEBUG: Log features for common segue songs
-                    if freq.title in ["Mike's Song", "Runaway Jim", "Colonel Forbin's Ascent", "I Am Hydrogen"]:
-                        logger.info("🔍 BIAS FIX: Found features for %s - appearances: %d", freq.title, features.total_appearances)
-
-                    # Dampen very common songs to prevent over-representation
-                    if features.total_appearances > 500:
-                        # Very common: 30% weight (e.g., Mike's Song, YEM, Possum)
-                        capped_weight = weight * 0.3
-                        logger.info("⬇️  BIAS FIX: Reducing %s (>500 appearances): %.2f → %.2f", freq.title, weight, capped_weight)
-                    elif features.total_appearances > 300:
-                        # Common: 50% weight (e.g., Runaway Jim, I Am Hydrogen)
-                        capped_weight = weight * 0.5
-                        logger.info("⬇️  BIAS FIX: Reducing %s (>300 appearances): %.2f → %.2f", freq.title, weight, capped_weight)
-                    # Scale down rare songs (historical count < 50)
-                    elif features.total_appearances < 30:
-                        # Very rare: 25% weight
-                        capped_weight = weight * 0.25
-                    elif features.total_appearances < 50:
-                        # Rare: 50% weight
-                        capped_weight = weight * 0.5
-                    else:
-                        # Normal frequency (30-500): no adjustment
-                        capped_weight = weight
-                    weighted_candidates[idx] = (freq, capped_weight)
-
-        # NEW: Apply segue trigger penalty to account for pattern expansion
-        # Songs with mandatory segues will add multiple songs to the set, so reduce their selection probability
-        if self._use_ml_features and self._feature_store:
-            for idx, (freq, weight) in enumerate(weighted_candidates):
-                bundle = feature_bundles.get(freq.title) or self._get_or_cache_features(
-                    freq.title, target_set, feature_cache
-                )
-                mandatory_segues = bundle["mandatory_segues"]
-                if mandatory_segues:
-                    # Calculate average pattern length this song triggers
-                    pattern_lengths = [len(seg.get('songs', [])) for seg in mandatory_segues]
-                    avg_pattern_length = sum(pattern_lengths) / len(pattern_lengths) if pattern_lengths else 1
-
-                    if avg_pattern_length > 1:
-                        # Apply penalty proportional to how many songs will be added
-                        # Example: 3-song pattern (Mike's > Hydrogen > Weekapaug) gets 0.33x penalty
-                        penalty = 1.0 / avg_pattern_length
-                        penalized_weight = weight * penalty
-                        weighted_candidates[idx] = (freq, penalized_weight)
-                        logger.debug(
-                            "Applying segue penalty to %s (pattern length %.1f): %.2f → %.2f",
-                            freq.title, avg_pattern_length, weight, penalized_weight
-                        )
-
-        # Apply ML placement probability adjustments
-        if self._use_ml_features and self._feature_store and target_set:
-            for idx, (freq, weight) in enumerate(weighted_candidates):
-                bundle = feature_bundles.get(freq.title) or self._get_or_cache_features(
-                    freq.title, target_set, feature_cache
-                )
-                placement_prob = bundle["placement_prob"]
-                if placement_prob > 0:
-                    # Blend historical weight with ML placement probability
-                    ml_adjusted = weight * (1 - self._ml_placement_weight) + placement_prob * self._ml_placement_weight
-                    weighted_candidates[idx] = (freq, ml_adjusted)
-
-        # Apply historical adjacency bonus
-        if previous_song and adjacency_map:
-            neighbors = adjacency_map.get(previous_song)
-            if neighbors:
-                filtered_neighbors = {
-                    song: count
-                    for song, count in neighbors.items()
-                    if count >= self._adjacency_min_support
-                }
-                if filtered_neighbors:
-                    max_neighbor = max(filtered_neighbors.values())
-                else:
-                    max_neighbor = 0
-                if max_neighbor > 0:
-                    for idx, (freq, weight) in enumerate(weighted_candidates):
-                        neighbor_weight = filtered_neighbors.get(freq.title)
-                        if neighbor_weight:
-                            normalized = neighbor_weight / max_neighbor
-                            boost = 1.0 + self._adjacency_bonus * normalized
-                            weighted_candidates[idx] = (freq, weight * boost)
-
-        # Apply ML transition lift bonus
-        if self._use_ml_features and self._feature_store and previous_song:
-            for idx, (freq, weight) in enumerate(weighted_candidates):
-                transition = self._feature_store.get_transition_lift(previous_song, freq.title)
-                if transition and transition.lift > 2.0:  # Only boost strong transitions
-                    # Normalize lift to reasonable range (2-10x -> 0-1)
-                    normalized_lift = min((transition.lift - 2.0) / 8.0, 1.0)
-                    boost = 1.0 + self._ml_transition_bonus * normalized_lift
-                    weighted_candidates[idx] = (freq, weight * boost)
-
-        # NEW: Apply STRONG boost for mandatory sequences (Phase 2.2)
-        if self._use_ml_features and self._feature_store and previous_song:
-            mandatory_next = self._feature_store.get_mandatory_next_songs(previous_song)
-            if mandatory_next:
-                for idx, (freq, weight) in enumerate(weighted_candidates):
-                    if freq.title in mandatory_next:
-                        # Much stronger boost than normal transitions (3× multiplier)
-                        weighted_candidates[idx] = (freq, weight * 3.0)
+        weighted_candidates = self._adjust_candidate_weights(
+            weighted_candidates,
+            previous_song=previous_song,
+            adjacency_map=adjacency_map,
+            target_set=target_set,
+            feature_bundles=feature_bundles,
+            feature_cache=feature_cache,
+        )
 
         total_weight = sum(weight for _, weight in weighted_candidates)
         if total_weight <= 0:

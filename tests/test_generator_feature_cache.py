@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import Any
 from random import Random
 from typing import Dict, Iterable, List, Optional, Set
 
@@ -106,3 +107,35 @@ def test_feature_cache_limits_duplicate_lookups(db_session) -> None:
     assert calls["mandatory_segues"] <= len(unique_titles)
     assert calls["song_features"] <= len(unique_titles)
     assert calls["placement_probability"] <= len(unique_titles)
+
+
+def test_weight_adjustments_use_single_pass_lookups(db_session) -> None:
+    """Combined adjustment loop should only touch each feature once per song."""
+
+    generator = SetlistGenerator(db_session, rng=Random(1), adjacency_bonus=0.0, use_ml_features=False)
+    generator._feature_store = _CountingFeatureStore()
+    generator._use_ml_features = True
+
+    pool = [
+        SongFrequency("Song Alpha", 10),
+        SongFrequency("Song Beta", 8),
+    ]
+    feature_cache: Dict[str, Dict[str, Any]] = {}
+
+    choice = generator._weighted_pick(
+        pool=pool,
+        used_songs=set(),
+        previous_song="Prev Song",
+        adjacency_map={"Prev Song": {"Song Alpha": 2, "Song Beta": 1}},
+        target_set="set1",
+        feature_cache=feature_cache,
+    )
+
+    assert choice in {"Song Alpha", "Song Beta"}
+
+    calls = generator._feature_store.calls  # type: ignore[assignment]
+    assert calls["song_features"] == len(pool)
+    assert calls["mandatory_segues"] == len(pool)
+    assert calls["placement_probability"] == len(pool)
+    assert calls["transition_lift"] == len(pool)
+    assert calls["mandatory_next_songs"] == 1
