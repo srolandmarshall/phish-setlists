@@ -7,7 +7,8 @@ from datetime import date
 import logging
 from pathlib import Path
 from random import Random
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+import time
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -658,6 +659,50 @@ class SetlistGenerator:
             else:
                 return stats.song_durations_p30  # Need tight versions
 
+    def _get_or_cache_features(
+        self,
+        song_title: str,
+        target_set: Optional[str],
+        feature_cache: Optional[Dict[str, Dict[str, Any]]],
+    ) -> Dict[str, Any]:
+        """Return cached song features (and placement data), populating cache when needed."""
+        if feature_cache is not None:
+            cached = feature_cache.get(song_title)
+            if cached is not None:
+                return cached
+
+        features = self._feature_store.get_song_features(song_title) if self._feature_store else None
+        mandatory_segues = self._feature_store.get_mandatory_segues(song_title) if self._feature_store else []
+        placement_prob = (
+            self._feature_store.get_placement_probability(song_title, target_set)
+            if self._feature_store and target_set
+            else 0.0
+        )
+
+        bundle = {
+            "features": features,
+            "mandatory_segues": mandatory_segues or [],
+            "placement_prob": placement_prob,
+        }
+
+        if feature_cache is not None:
+            feature_cache[song_title] = bundle
+        return bundle
+
+    def _build_feature_cache(
+        self,
+        pool: Iterable[SongFrequency],
+        target_set: str,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Pre-compute song-level feature lookups for a candidate pool."""
+        if not (self._use_ml_features and self._feature_store):
+            return {}
+
+        cache: Dict[str, Dict[str, Any]] = {}
+        for freq in pool:
+            self._get_or_cache_features(freq.title, target_set, cache)
+        return cache
+
     def _select_with_duration_budget(
         self,
         *,
@@ -727,6 +772,17 @@ class SetlistGenerator:
         selection: List[str] = []
         prev = previous_song
 
+        feature_cache: Dict[str, Dict[str, Any]] = {}
+        if self._use_ml_features and self._feature_store:
+            cache_start = time.perf_counter()
+            feature_cache = self._build_feature_cache(pool, target_set)
+            logger.info(
+                "    ⏱️  Cached %d songs for %s in %.3fs",
+                len(feature_cache),
+                segment_label,
+                time.perf_counter() - cache_start,
+            )
+
         while len(selection) < desired_count:
             pool = [freq for freq in pool if freq.title not in used_songs]
             
@@ -736,7 +792,8 @@ class SetlistGenerator:
                 filtered_pool = []
                 for freq in pool:
                     is_segue_only = False
-                    mandatory_segues = self._feature_store.get_mandatory_segues(freq.title)
+                    bundle = self._get_or_cache_features(freq.title, target_set, feature_cache)
+                    mandatory_segues = bundle["mandatory_segues"]
                     for segue in mandatory_segues:
                         songs = segue.get('songs', [])
                         if len(songs) > 1 and freq.title in songs and songs[0] != freq.title:
@@ -758,6 +815,7 @@ class SetlistGenerator:
                 previous_song=prev,
                 adjacency_map=adjacency_map,
                 target_set=target_set,
+                feature_cache=feature_cache,
             )
             if not choice:
                 break
@@ -765,7 +823,8 @@ class SetlistGenerator:
             # PHASE 4.1B: Check if choice starts a mandatory segue pattern
             # If so, add ALL songs in the segue as a group (not just next song)
             if self._use_ml_features and self._feature_store:
-                mandatory_segues = self._feature_store.get_mandatory_segues(choice)
+                bundle = self._get_or_cache_features(choice, target_set, feature_cache)
+                mandatory_segues = bundle["mandatory_segues"]
                 if mandatory_segues:
                     # This song starts (or continues) a mandatory segue
                     # Find the complete pattern and add all songs
@@ -992,17 +1051,6 @@ class SetlistGenerator:
         if self._current_era != "4.0" and "I Am the Walrus" in eligible:
             eligible.discard("I Am the Walrus")
         
-        # PHASE 4: Filter out songs that MUST be part of mandatory segues
-        # These songs should not appear unless their full segue pattern can be completed
-        if self._feature_store:
-            songs_in_mandatory_segues = set()
-            for song in eligible:
-                mandatory_segues = self._feature_store.get_mandatory_segues(song)
-                if mandatory_segues:
-                    # This song is part of mandatory segue(s)
-                    # We'll allow selection but warn if pattern can't complete
-                    songs_in_mandatory_segues.add(song)
-
         candidates = [
             freq for freq in frequencies_by_set.get(target_set, []) if freq.title in eligible
         ]
@@ -1034,6 +1082,7 @@ class SetlistGenerator:
         previous_song: Optional[str] = None,
         adjacency_map: Optional[Dict[str, Dict[str, int]]] = None,
         target_set: Optional[str] = None,
+        feature_cache: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Optional[str]:
         available = [freq for freq in pool if freq.title not in used_songs]
         if not available:
@@ -1042,6 +1091,15 @@ class SetlistGenerator:
         weighted_candidates: List[Tuple[SongFrequency, float]] = [
             (freq, float(freq.weight)) for freq in available
         ]
+
+        feature_bundles: Dict[str, Dict[str, Any]] = {}
+        if self._use_ml_features and self._feature_store:
+            for freq in available:
+                feature_bundles[freq.title] = self._get_or_cache_features(
+                    freq.title,
+                    target_set,
+                    feature_cache,
+                )
 
         # PHASE 4: Mandatory segue enforcement moved to _select_with_duration_budget
         # We now add complete segue patterns as a group, not just enforce next song
@@ -1088,7 +1146,10 @@ class SetlistGenerator:
             if weighted_candidates:
                 logger.info("🔍 BIAS FIX: Sample songs to check: %s", [freq.title for freq, _ in weighted_candidates[:5]])
             for idx, (freq, weight) in enumerate(weighted_candidates):
-                features = self._feature_store.get_song_features(freq.title)
+                bundle = feature_bundles.get(freq.title) or self._get_or_cache_features(
+                    freq.title, target_set, feature_cache
+                )
+                features = bundle["features"]
                 if not features:
                     logger.warning("⚠️  BIAS FIX: No features found for song: %s (repr: %r)", freq.title, freq.title)
                 if features:
@@ -1121,7 +1182,10 @@ class SetlistGenerator:
         # Songs with mandatory segues will add multiple songs to the set, so reduce their selection probability
         if self._use_ml_features and self._feature_store:
             for idx, (freq, weight) in enumerate(weighted_candidates):
-                mandatory_segues = self._feature_store.get_mandatory_segues(freq.title)
+                bundle = feature_bundles.get(freq.title) or self._get_or_cache_features(
+                    freq.title, target_set, feature_cache
+                )
+                mandatory_segues = bundle["mandatory_segues"]
                 if mandatory_segues:
                     # Calculate average pattern length this song triggers
                     pattern_lengths = [len(seg.get('songs', [])) for seg in mandatory_segues]
@@ -1141,9 +1205,10 @@ class SetlistGenerator:
         # Apply ML placement probability adjustments
         if self._use_ml_features and self._feature_store and target_set:
             for idx, (freq, weight) in enumerate(weighted_candidates):
-                placement_prob = self._feature_store.get_placement_probability(
-                    freq.title, target_set
+                bundle = feature_bundles.get(freq.title) or self._get_or_cache_features(
+                    freq.title, target_set, feature_cache
                 )
+                placement_prob = bundle["placement_prob"]
                 if placement_prob > 0:
                     # Blend historical weight with ML placement probability
                     ml_adjusted = weight * (1 - self._ml_placement_weight) + placement_prob * self._ml_placement_weight
