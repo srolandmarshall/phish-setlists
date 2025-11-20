@@ -1,5 +1,7 @@
 # Phish Setlist Maker
 
+## A Python Backend
+
 A small, opinionated learning project for exploring Phish setlists and experimenting with automated setlist generation, now enhanced with ML-driven features.
 
 This repository contains utilities, a smart generator, and notebooks used while learning Python, SQLAlchemy, and data-driven heuristics for assembling setlists. It is intentionally lightweight and best-suited for local experimentation.
@@ -11,6 +13,7 @@ This repository contains utilities, a smart generator, and notebooks used while 
 For a complete list of features and recent improvements, see [docs/TOOLTIP-FEATURE.md](docs/TOOLTIP-FEATURE.md) and other documentation in the [docs/](docs/) directory.
 
 **Highlights:**
+
 - 🎸 **ML-Enhanced Generation** - Historical placement probabilities and transition patterns
 - 🎵 **Interactive Tooltips** - Click songs for performance details from Phish.in (NEW!)
 - 📱 **Mobile-Friendly** - Fully responsive design with touch-optimized UI
@@ -74,6 +77,7 @@ poetry run uvicorn phish_setlist_maker.api:app --reload
 ```
 
 Then visit:
+
 - **Interactive API docs**: http://localhost:8000/docs
 - **Generate HTML setlist**: http://localhost:8000/generate
 - **Health check**: http://localhost:8000/health
@@ -118,6 +122,7 @@ poetry run python scripts/generate_setlist.py --playlist --html
 ```
 
 **Command flags**:
+
 - `--playlist` — produce an M3U playlist alongside the setlist
 - `--html` — produce an HTML summary (tables + embedded player)
 - `--allow-previous-show` — include songs from the most recent show when allowed by rules
@@ -182,17 +187,20 @@ phish-setlist-maker/
 This project includes ML-enhanced generation capabilities based on historical analysis:
 
 ### Phase 1: Feature Engineering (Complete)
+
 - **Song placement probabilities**: Per-set appearance rates for 389 songs
 - **Transition lift scores**: 166 high-confidence song pairs (e.g., Mike's > Weekapaug)
 - **Multi-home classification**: 246 songs with flexible set placement
 - **Visualizations**: Heatmaps, entropy scores, temporal trends
 
 Run feature engineering:
+
 ```bash
 poetry run python scripts/build_features.py
 ```
 
 ### Phase 2: Generator Integration (Phase 2.1 Complete)
+
 - **ML-enhanced mode**: Blends ML probabilities with historical weights (**enabled by default**)
 - **Configurable**: Tune placement weight (default 30%) and transition bonus (default 10%)
 - **Backward compatible**: Can disable with `use_ml_features=false`
@@ -248,7 +256,7 @@ This is a small personal project, but contributions are welcome. A few guideline
 
 ## Data Sources & Attribution
 
-This project relies on data from **[Phish.in](https://phish.in/)**, which provides comprehensive Phish setlist and performance information through their API. 
+This project relies on data from **[Phish.in](https://phish.in/)**, which provides comprehensive Phish setlist and performance information through their API.
 
 - **Phish.in API**: https://phish.in/api-docs
 - **License**: MIT License
@@ -269,4 +277,3 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
