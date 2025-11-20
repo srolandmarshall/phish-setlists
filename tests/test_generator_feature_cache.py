@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any
 from random import Random
 from typing import Dict, Iterable, List, Optional, Set
 
 from phish_setlist_maker.analysis.feature_store import SongFeatures
 from phish_setlist_maker.generator.core import SetlistGenerator
+from phish_setlist_maker.generator.feature_cache import FeatureCache
 from phish_setlist_maker.generator.historical import SongFrequency
 
 
@@ -120,7 +120,7 @@ def test_weight_adjustments_use_single_pass_lookups(db_session) -> None:
         SongFrequency("Song Alpha", 10),
         SongFrequency("Song Beta", 8),
     ]
-    feature_cache: Dict[str, Dict[str, Any]] = {}
+    feature_cache = FeatureCache(generator._feature_store, True, "set1")  # type: ignore[arg-type]
 
     choice = generator._weighted_pick(
         pool=pool,

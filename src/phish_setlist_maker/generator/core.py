@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from random import Random
 import time
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -23,6 +23,7 @@ from ..constants import (
     THREE_SET_DURATION_OVERRIDES,
 )
 from ..models import Show
+from .feature_cache import FeatureCache
 from .historical import (
     SegmentStatistics,
     SongFrequency,
@@ -32,6 +33,7 @@ from .historical import (
     songs_seen_by_date,
 )
 from .rules import apply_rules
+from .weights import WeightingContext, adjust_candidate_weights
 
 
 @dataclass(slots=True)
@@ -659,200 +661,6 @@ class SetlistGenerator:
             else:
                 return stats.song_durations_p30  # Need tight versions
 
-    def _get_or_cache_features(
-        self,
-        song_title: str,
-        target_set: Optional[str],
-        feature_cache: Optional[Dict[str, Dict[str, Any]]],
-    ) -> Dict[str, Any]:
-        """Return cached song features (and placement data), populating cache when needed."""
-        if feature_cache is not None:
-            cached = feature_cache.get(song_title)
-            if cached is not None:
-                return cached
-
-        features = self._feature_store.get_song_features(song_title) if self._feature_store else None
-        mandatory_segues = self._feature_store.get_mandatory_segues(song_title) if self._feature_store else []
-        placement_prob = (
-            self._feature_store.get_placement_probability(song_title, target_set)
-            if self._feature_store and target_set
-            else 0.0
-        )
-
-        bundle = {
-            "features": features,
-            "mandatory_segues": mandatory_segues or [],
-            "placement_prob": placement_prob,
-        }
-
-        if feature_cache is not None:
-            feature_cache[song_title] = bundle
-        return bundle
-
-    def _build_feature_cache(
-        self,
-        pool: Iterable[SongFrequency],
-        target_set: str,
-    ) -> Dict[str, Dict[str, Any]]:
-        """Pre-compute song-level feature lookups for a candidate pool."""
-        if not (self._use_ml_features and self._feature_store):
-            return {}
-
-        cache: Dict[str, Dict[str, Any]] = {}
-        for freq in pool:
-            self._get_or_cache_features(freq.title, target_set, cache)
-        return cache
-
-    def _adjust_candidate_weights(
-        self,
-        weighted_candidates: List[Tuple[SongFrequency, float]],
-        *,
-        previous_song: Optional[str],
-        adjacency_map: Optional[Dict[str, Dict[str, int]]],
-        target_set: Optional[str],
-        feature_bundles: Dict[str, Dict[str, Any]],
-        feature_cache: Optional[Dict[str, Dict[str, Any]]],
-    ) -> List[Tuple[SongFrequency, float]]:
-        """Apply all candidate weight adjustments in a single pass."""
-
-        # Pre-compute adjacency normalization for this previous song (if any)
-        filtered_neighbors: Dict[str, int] = {}
-        max_neighbor = 0
-        if previous_song and adjacency_map:
-            neighbors = adjacency_map.get(previous_song)
-            if neighbors:
-                filtered_neighbors = {
-                    song: count
-                    for song, count in neighbors.items()
-                    if count >= self._adjacency_min_support
-                }
-                if filtered_neighbors:
-                    max_neighbor = max(filtered_neighbors.values())
-
-        mandatory_next: Set[str] = set()
-        if self._use_ml_features and self._feature_store and previous_song:
-            mandatory_next = self._feature_store.get_mandatory_next_songs(previous_song)
-
-        adjusted: List[Tuple[SongFrequency, float]] = []
-
-        if self._use_ml_features and self._feature_store:
-            logger.info(
-                "🔍 BIAS FIX: Applying frequency caps (use_ml=%s, store=%s, candidates=%d)",
-                self._use_ml_features,
-                self._feature_store is not None,
-                len(weighted_candidates),
-            )
-            if weighted_candidates:
-                logger.info(
-                    "🔍 BIAS FIX: Sample songs to check: %s",
-                    [candidate.title for candidate, _ in weighted_candidates[:5]],
-                )
-
-        for freq, weight in weighted_candidates:
-            adjusted_weight = weight
-
-            if self._use_ml_features and self._feature_store:
-                bundle = feature_bundles.get(freq.title) or self._get_or_cache_features(
-                    freq.title,
-                    target_set,
-                    feature_cache,
-                )
-                features = bundle["features"]
-                mandatory_segues = bundle["mandatory_segues"]
-                placement_prob = bundle["placement_prob"]
-
-                logger.info(
-                    "🔍 BIAS FIX: Applying frequency caps (use_ml=%s, store=%s, candidates=%d)",
-                    self._use_ml_features,
-                    self._feature_store is not None,
-                    len(weighted_candidates),
-                )
-                if weighted_candidates:
-                    logger.info(
-                        "🔍 BIAS FIX: Sample songs to check: %s",
-                        [candidate.title for candidate, _ in weighted_candidates[:5]],
-                    )
-
-                if not features:
-                    logger.warning(
-                        "⚠️  BIAS FIX: No features found for song: %s (repr: %r)",
-                        freq.title,
-                        freq.title,
-                    )
-                if features:
-                    if freq.title in ["Mike's Song", "Runaway Jim", "Colonel Forbin's Ascent", "I Am Hydrogen"]:
-                        logger.info(
-                            "🔍 BIAS FIX: Found features for %s - appearances: %d",
-                            freq.title,
-                            features.total_appearances,
-                        )
-
-                    if features.total_appearances > 500:
-                        capped_weight = adjusted_weight * 0.3
-                        logger.info(
-                            "⬇️  BIAS FIX: Reducing %s (>500 appearances): %.2f → %.2f",
-                            freq.title,
-                            adjusted_weight,
-                            capped_weight,
-                        )
-                        adjusted_weight = capped_weight
-                    elif features.total_appearances > 300:
-                        capped_weight = adjusted_weight * 0.5
-                        logger.info(
-                            "⬇️  BIAS FIX: Reducing %s (>300 appearances): %.2f → %.2f",
-                            freq.title,
-                            adjusted_weight,
-                            capped_weight,
-                        )
-                        adjusted_weight = capped_weight
-                    elif features.total_appearances < 30:
-                        adjusted_weight *= 0.25
-                    elif features.total_appearances < 50:
-                        adjusted_weight *= 0.5
-
-                if mandatory_segues:
-                    pattern_lengths = [len(seg.get('songs', [])) for seg in mandatory_segues]
-                    avg_pattern_length = sum(pattern_lengths) / len(pattern_lengths) if pattern_lengths else 1
-
-                    if avg_pattern_length > 1:
-                        penalty = 1.0 / avg_pattern_length
-                        penalized_weight = adjusted_weight * penalty
-                        adjusted_weight = penalized_weight
-                        logger.debug(
-                            "Applying segue penalty to %s (pattern length %.1f): %.2f → %.2f",
-                            freq.title,
-                            avg_pattern_length,
-                            weight,
-                            penalized_weight,
-                        )
-
-                if placement_prob > 0 and target_set:
-                    adjusted_weight = (
-                        adjusted_weight * (1 - self._ml_placement_weight)
-                        + placement_prob * self._ml_placement_weight
-                    )
-
-            if previous_song and max_neighbor > 0:
-                neighbor_weight = filtered_neighbors.get(freq.title)
-                if neighbor_weight:
-                    normalized = neighbor_weight / max_neighbor
-                    boost = 1.0 + self._adjacency_bonus * normalized
-                    adjusted_weight *= boost
-
-            if self._use_ml_features and self._feature_store and previous_song:
-                transition = self._feature_store.get_transition_lift(previous_song, freq.title)
-                if transition and transition.lift > 2.0:  # Only boost strong transitions
-                    normalized_lift = min((transition.lift - 2.0) / 8.0, 1.0)
-                    boost = 1.0 + self._ml_transition_bonus * normalized_lift
-                    adjusted_weight *= boost
-
-                if mandatory_next and freq.title in mandatory_next:
-                    adjusted_weight *= 3.0
-
-            adjusted.append((freq, adjusted_weight))
-
-        adjusted.sort(key=lambda x: -x[1])
-        return adjusted
 
     def _select_with_duration_budget(
         self,
@@ -923,10 +731,10 @@ class SetlistGenerator:
         selection: List[str] = []
         prev = previous_song
 
-        feature_cache: Dict[str, Dict[str, Any]] = {}
-        if self._use_ml_features and self._feature_store:
+        feature_cache = FeatureCache(self._feature_store, self._use_ml_features, target_set)
+        if feature_cache.enabled:
             cache_start = time.perf_counter()
-            feature_cache = self._build_feature_cache(pool, target_set)
+            feature_cache.warm(pool)
             logger.info(
                 "    ⏱️  Cached %d songs for %s in %.3fs",
                 len(feature_cache),
@@ -943,7 +751,7 @@ class SetlistGenerator:
                 filtered_pool = []
                 for freq in pool:
                     is_segue_only = False
-                    bundle = self._get_or_cache_features(freq.title, target_set, feature_cache)
+                    bundle = feature_cache.get(freq.title)
                     mandatory_segues = bundle["mandatory_segues"]
                     for segue in mandatory_segues:
                         songs = segue.get('songs', [])
@@ -974,7 +782,7 @@ class SetlistGenerator:
             # PHASE 4.1B: Check if choice starts a mandatory segue pattern
             # If so, add ALL songs in the segue as a group (not just next song)
             if self._use_ml_features and self._feature_store:
-                bundle = self._get_or_cache_features(choice, target_set, feature_cache)
+                bundle = feature_cache.get(choice)
                 mandatory_segues = bundle["mandatory_segues"]
                 if mandatory_segues:
                     # This song starts (or continues) a mandatory segue
@@ -1233,7 +1041,7 @@ class SetlistGenerator:
         previous_song: Optional[str] = None,
         adjacency_map: Optional[Dict[str, Dict[str, int]]] = None,
         target_set: Optional[str] = None,
-        feature_cache: Optional[Dict[str, Dict[str, Any]]] = None,
+        feature_cache: Optional[FeatureCache] = None,
     ) -> Optional[str]:
         available = [freq for freq in pool if freq.title not in used_songs]
         if not available:
@@ -1243,14 +1051,7 @@ class SetlistGenerator:
             (freq, float(freq.weight)) for freq in available
         ]
 
-        feature_bundles: Dict[str, Dict[str, Any]] = {}
-        if self._use_ml_features and self._feature_store:
-            for freq in available:
-                feature_bundles[freq.title] = self._get_or_cache_features(
-                    freq.title,
-                    target_set,
-                    feature_cache,
-                )
+        feature_cache = feature_cache or FeatureCache(self._feature_store, self._use_ml_features, target_set)
 
         # PHASE 4: Mandatory segue enforcement moved to _select_with_duration_budget
         # We now add complete segue patterns as a group, not just enforce next song
@@ -1289,13 +1090,22 @@ class SetlistGenerator:
             if not weighted_candidates:
                 return None
 
-        weighted_candidates = self._adjust_candidate_weights(
+        weighting_context = WeightingContext(
+            use_ml_features=self._use_ml_features,
+            feature_store=self._feature_store,
+            adjacency_bonus=self._adjacency_bonus,
+            adjacency_min_support=self._adjacency_min_support,
+            ml_placement_weight=self._ml_placement_weight,
+            ml_transition_bonus=self._ml_transition_bonus,
+            logger=logger,
+        )
+        weighted_candidates = adjust_candidate_weights(
             weighted_candidates,
             previous_song=previous_song,
             adjacency_map=adjacency_map,
             target_set=target_set,
-            feature_bundles=feature_bundles,
             feature_cache=feature_cache,
+            context=weighting_context,
         )
 
         total_weight = sum(weight for _, weight in weighted_candidates)
