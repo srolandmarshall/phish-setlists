@@ -665,8 +665,11 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
 
     playlist_artifacts: Optional[PlaylistArtifacts] = None
     if request.include_playlist or request.prefetch_track_metadata:
+        t2 = time.time()
         catalog = build_song_catalog(session)
+        logger.info("⏱️  Catalog build took %.2fs", time.time() - t2)
 
+        t3 = time.time()
         # PERFORMANCE: Prefetch track metadata in parallel before sequential processing
         # Collect all songs that will need tracks
         all_songs = []
