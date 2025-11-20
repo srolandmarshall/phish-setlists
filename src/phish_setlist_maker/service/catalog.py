@@ -71,6 +71,10 @@ def determine_origin_from_entry(entry: SongCatalogEntry) -> Optional[str]:
 
 def build_song_catalog(db_session: Session) -> SongCatalog:
     """Construct lookups for titles/aliases to song metadata."""
+    import time
+    import logging
+    t_start = time.time()
+    logger = logging.getLogger("uvicorn.error")
 
     by_title: Dict[str, SongCatalogEntry] = {}
     by_slug: Dict[str, SongCatalogEntry] = {}
@@ -97,4 +101,5 @@ def build_song_catalog(db_session: Session) -> SongCatalog:
             if normalized_alias and normalized_alias not in by_title:
                 by_title[normalized_alias] = entry
 
+    logger.info("    ⏱️  Catalog query took %.2fs", time.time() - t_start)
     return SongCatalog(by_title=by_title, by_slug=by_slug)

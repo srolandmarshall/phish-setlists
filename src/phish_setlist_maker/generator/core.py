@@ -174,6 +174,9 @@ class SetlistGenerator:
                 level (service layer defaults still apply).
         """
 
+        import time
+        t_gen_start = time.time()
+
         if num_sets not in (2, 3):
             raise ValueError("num_sets must be 2 or 3")
 
@@ -209,6 +212,7 @@ class SetlistGenerator:
             include_encore=include_encore,
         )
 
+        t_db_start = time.time()
         previous_show_songs: Set[str] = set()
         previous_show_date: Optional[date] = None
         if exclude_previous_show:
@@ -253,8 +257,10 @@ class SetlistGenerator:
             era=era,
             year=year,
         )
+        logger.info("  ⏱️  DB queries (frequencies/previous) took %.2fs", time.time() - t_db_start)
 
         # Pre-compute segment statistics and long-form song references.
+        t_stats_start = time.time()
         segment_stats_map: Dict[str, Optional[SegmentStatistics]] = {}
         segment_longform_titles: Dict[str, Set[str]] = {}
 
@@ -273,7 +279,9 @@ class SetlistGenerator:
             )
             segment_stats_map[canonical] = stats
             segment_longform_titles[canonical] = {title for title, _ in stats.longform_songs}
+        logger.info("  ⏱️  Segment statistics computation took %.2fs", time.time() - t_stats_start)
 
+        t_set_gen_start = time.time()
         used_songs: Set[str] = set(previous_show_songs)
         metadata_notes: List[str] = []
         if exclude_previous_show and previous_show_songs:
@@ -372,6 +380,8 @@ class SetlistGenerator:
             notes=metadata_notes,
         )
 
+        logger.info("  ⏱️  Set/encore generation loop took %.2fs", time.time() - t_set_gen_start)
+        logger.info("  ⏱️  TOTAL generator.generate() took %.2fs", time.time() - t_gen_start)
         return GeneratedSetlist(sets=sets, encore=encore_segment, metadata=metadata)
 
     def _latest_show_date(self) -> date:
