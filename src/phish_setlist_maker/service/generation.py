@@ -589,6 +589,9 @@ def prepare_playlist_artifacts(
 
 def generate_show(session: Session, request: GenerationRequest) -> GenerationResult:
     """Generate a setlist and any requested media artifacts."""
+    import time
+    start_time = time.time()
+    logger.info("⏱️  Generation started")
 
     effective_era, era_adjustment = resolve_era(request.year, request.era)
 
@@ -636,6 +639,7 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
             rng=length_rng,
         )
 
+    t1 = time.time()
     generated = generator.generate(
         reference_date=request.reference_date,
         era=effective_era,
@@ -646,6 +650,7 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
         exclude_previous_show=not allow_previous_show,
         max_segues_per_set=request.max_segues_per_set,
     )
+    logger.info("⏱️  Setlist generation took %.2fs", time.time() - t1)
 
     metadata = generated.metadata
     if era_adjustment and era_adjustment not in metadata.notes:
@@ -707,6 +712,7 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
             set_lengths=set_lengths,  # NEW: Pass target durations for 15% threshold check
             max_segues_per_set=request.max_segues_per_set,  # NEW: Pass segue limit
         )
+        logger.info("⏱️  Track metadata fetching took %.2fs", time.time() - t3)
 
     track_lookup: Dict[str, SongDisplay] = {}
     if playlist_artifacts:
@@ -768,6 +774,7 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
                             t.duration_seconds for t in section_tracks if t.duration_seconds
                         )
 
+    logger.info("⏱️  TOTAL generation took %.2fs", time.time() - start_time)
     return GenerationResult(
         seed=seed,
         generated_at=generated_at,
