@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import pytest
 
 from phish_setlist_maker.api import GenerateRequestModel
@@ -24,13 +22,6 @@ def test_generate_request_model_rejects_invalid_label():
         GenerateRequestModel(set_lengths={"weird": 5})
 
 
-def test_generate_request_model_default_year_is_utc_now(monkeypatch):
-    class FakeDatetime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime(2030, 5, 1, tzinfo=timezone.utc)
-
-    monkeypatch.setattr("phish_setlist_maker.api.schemas.datetime", FakeDatetime)
-
+def test_generate_request_model_leaves_year_resolution_to_service():
     model = GenerateRequestModel()
-    assert model.year == 2030
+    assert model.year is None
