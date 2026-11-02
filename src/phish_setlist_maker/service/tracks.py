@@ -7,8 +7,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from pathlib import Path
 from random import Random
-from typing import Dict, List, Optional, Tuple
+from threading import Lock
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from sqlalchemy import select, update
@@ -18,6 +20,9 @@ from ..models import Show, Song, SongTrack, Track
 from .errors import PlaylistServiceError
 
 logger = logging.getLogger("uvicorn.error")
+
+_SET_ENDING_LOOKUP_CACHE: Dict[str, Tuple[int, int, Any]] = {}
+_SET_ENDING_LOOKUP_CACHE_LOCK = Lock()
 
 
 @dataclass(frozen=True)
@@ -88,7 +93,6 @@ def query_set_ending_tracks_for_song(
         List of CandidateTrack objects for performances that ended the specified set
     """
     import pandas as pd
-    from pathlib import Path
     
     # Load set-ending tracks lookup
     lookup_path = Path(__file__).resolve().parent.parent.parent.parent / "data" / "analytics" / "features" / "set_ending_tracks.parquet"
@@ -97,7 +101,10 @@ def query_set_ending_tracks_for_song(
         # Fall back to regular tracks if lookup doesn't exist
         return []
     
-    df = pd.read_parquet(lookup_path)
+    df = _read_set_ending_lookup(lookup_path)
+    if df is None:
+        # The file may have been removed between exists() and stat().
+        return []
     
     # For encores and Set 2, share tracks (they're both closers)
     if canonical_set == "encore":
@@ -138,6 +145,44 @@ def query_set_ending_tracks_for_song(
         )
     
     return candidates
+
+
+def _read_set_ending_lookup(lookup_path: Path):
+    """Read and cache the set-ending lookup until its file signature changes.
+
+    The lock covers the cache check and initial read so concurrent playlist
+    requests don't all parse the same Parquet file. A file replaced during the
+    read is returned for this request but not cached; the next call reloads it.
+    """
+    import pandas as pd
+
+    try:
+        resolved_path = lookup_path.resolve()
+    except FileNotFoundError:
+        return None
+
+    path_key = str(resolved_path)
+    with _SET_ENDING_LOOKUP_CACHE_LOCK:
+        try:
+            stat = resolved_path.stat()
+        except FileNotFoundError:
+            return None
+        signature = (stat.st_mtime_ns, stat.st_size)
+
+        cached = _SET_ENDING_LOOKUP_CACHE.get(path_key)
+        if cached is not None and cached[:2] == signature:
+            return cached[2]
+
+        dataframe = pd.read_parquet(resolved_path)
+        try:
+            after_read = resolved_path.stat()
+        except FileNotFoundError:
+            return dataframe
+
+        after_signature = (after_read.st_mtime_ns, after_read.st_size)
+        if after_signature == signature:
+            _SET_ENDING_LOOKUP_CACHE[path_key] = (*signature, dataframe)
+        return dataframe
 
 
 def fetch_remote_track_metadata(
