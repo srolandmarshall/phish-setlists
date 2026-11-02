@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+PGHOST="${PGHOST:-${DB_HOST:-localhost}}"
+PGPORT="${PGPORT:-${DB_PORT:-5432}}"
+PGUSER="${PGUSER:-${DB_USER:-}}"
+PGPASSWORD="${PGPASSWORD:-${DB_PASS:-}}"
+export PGHOST PGPORT PGUSER PGPASSWORD
+
+if [[ -z "$PGUSER" ]]; then
+  echo "Set PGUSER or DB_USER to a PostgreSQL role with CREATEDB and restore permissions." >&2
+  exit 2
+fi
+
+target_db="${TARGET_DB:-phish-setlist-maker-dev-$(date +%Y%m%d)}"
+if [[ ! "$target_db" =~ ^[A-Za-z0-9_-]{1,63}$ ]]; then
+  echo "TARGET_DB must be a PostgreSQL identifier using letters, digits, '_' or '-' (max 63 characters)." >&2
+  exit 2
+fi
+
+database_created=0
+refresh_complete=0
+cleanup() {
+  local status=$?
+  if [[ "$database_created" == "1" && "$refresh_complete" != "1" ]]; then
+    dropdb --if-exists --maintenance-db=postgres "$target_db" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$temporary_sql" ]]; then
+    rm -f -- "$temporary_sql"
+  fi
+  return "$status"
+}
+trap cleanup EXIT
+
+temporary_sql=""
+sql_file="${PHISHIN_DEV_SQL_FILE:-}"
+if [[ -n "$sql_file" ]]; then
+  if [[ ! -r "$sql_file" ]]; then
+    echo "PHISHIN_DEV_SQL_FILE is not readable: $sql_file" >&2
+    exit 2
+  fi
+else
+  temporary_sql="$(mktemp "${TMPDIR:-/tmp}/phishin-dev.XXXXXX.sql")"
+  sql_file="$temporary_sql"
+  curl --fail --location --silent --show-error --retry 3 \
+    'https://www.dropbox.com/scl/fi/6zv4bzxxcjgv3ouv8d3ek/phishin-dev.sql?rlkey=4trafp2vxcgc1iuuq36yhl9gc&dl=1' \
+    --output "$sql_file"
+fi
+
+server_version_num="$(psql -XAtq --dbname=postgres --command='SHOW server_version_num')"
+if (( server_version_num < 170000 )); then
+  echo "The Phish.in development dump requires PostgreSQL 17 or newer (server version: $server_version_num)." >&2
+  exit 2
+fi
+
+exists="$(psql -XAtq --dbname=postgres --command="SELECT 1 FROM pg_database WHERE datname = '$target_db'")"
+if [[ "$exists" == "1" ]]; then
+  echo "Database '$target_db' already exists; choose a new TARGET_DB. Existing databases are never dropped." >&2
+  exit 2
+fi
+
+createdb --maintenance-db=postgres --owner="$PGUSER" "$target_db"
+database_created=1
+
+psql -X --single-transaction --set ON_ERROR_STOP=on \
+  --dbname="$target_db" --file="$sql_file"
+
+# The Phish.in dump lacks the API's local metadata cache and deferred payload columns.
+psql -X --set ON_ERROR_STOP=on --dbname="$target_db" <<'SQL'
+ALTER TABLE public.tracks ADD COLUMN IF NOT EXISTS metadata_cache json;
+ALTER TABLE public.tracks ALTER COLUMN metadata_cache TYPE json USING metadata_cache::json;
+ALTER TABLE public.tracks ADD COLUMN IF NOT EXISTS audio_file_data text;
+ALTER TABLE public.tracks ADD COLUMN IF NOT EXISTS waveform_png_data text;
+SQL
+
+psql -X --set ON_ERROR_STOP=on --dbname="$target_db" \
+  --command="SELECT COUNT(*) AS show_count, MIN(date) AS first_show, MAX(date) AS latest_show FROM public.shows" \
+  --command="SELECT COUNT(*) AS shows_2025_2026 FROM public.shows WHERE date >= DATE '2025-01-01' AND date < DATE '2027-01-01'"
+
+refresh_complete=1
+echo "Refreshed database: $target_db"
+echo "Existing databases were left unchanged. Set DB_NAME=$target_db after reviewing the counts above."
