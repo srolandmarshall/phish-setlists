@@ -69,7 +69,7 @@ TARGET_DB=phish-setlist-maker-dev-20261101 \
   scripts/refresh_phishin_dev_database.sh
 ```
 
-The script downloads the linked dump, imports it transactionally, adds the API's local `tracks` columns, and prints the total show range plus the 2025–2026 count. It refuses to overwrite an existing target and removes a newly created target if restore fails. Use a PostgreSQL role with database creation and restore permissions. Once the counts look right, point the local API at the new database by setting `DB_NAME` in `.env` to the printed database name. The previous database remains available by switching `DB_NAME` back.
+The reviewed Phish.in development dump is checked in as `data/phishin-dev.sql`. The script verifies its pinned SHA-256 checksum, imports it transactionally, adds the API's local `tracks` columns, and prints the total show range plus the 2025–2026 count. To refresh the seed later, download and review the replacement SQL, replace that file, and update the expected checksum in the script. It refuses to execute a dump with a different checksum or overwrite an existing target, and removes a newly created target if restore fails. Use a PostgreSQL role with database creation and restore permissions. Once the counts look right, point the local API at the new database by setting `DB_NAME` in `.env` to the printed database name. The previous database remains available by switching `DB_NAME` back.
 
 ### Usage Options
 

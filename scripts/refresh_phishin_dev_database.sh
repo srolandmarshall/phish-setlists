@@ -2,6 +2,11 @@
 
 set -euo pipefail
 
+# Keep this checksum pinned to the reviewed seed snapshot in data/phishin-dev.sql.
+expected_sql_sha256="855b57333b92484e4c0d0d0d3a025b787abbeb63455e564f733bbdd76d4c81d0"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+sql_file="${script_dir}/../data/phishin-dev.sql"
+
 PGHOST="${PGHOST:-${DB_HOST:-localhost}}"
 PGPORT="${PGPORT:-${DB_PORT:-5432}}"
 PGUSER="${PGUSER:-${DB_USER:-}}"
@@ -26,26 +31,21 @@ cleanup() {
   if [[ "$database_created" == "1" && "$refresh_complete" != "1" ]]; then
     dropdb --if-exists --maintenance-db=postgres "$target_db" >/dev/null 2>&1 || true
   fi
-  if [[ -n "$temporary_sql" ]]; then
-    rm -f -- "$temporary_sql"
-  fi
   return "$status"
 }
 trap cleanup EXIT
 
-temporary_sql=""
-sql_file="${PHISHIN_DEV_SQL_FILE:-}"
-if [[ -n "$sql_file" ]]; then
-  if [[ ! -r "$sql_file" ]]; then
-    echo "PHISHIN_DEV_SQL_FILE is not readable: $sql_file" >&2
-    exit 2
-  fi
-else
-  temporary_sql="$(mktemp "${TMPDIR:-/tmp}/phishin-dev.XXXXXX.sql")"
-  sql_file="$temporary_sql"
-  curl --fail --location --silent --show-error --retry 3 \
-    'https://www.dropbox.com/scl/fi/6zv4bzxxcjgv3ouv8d3ek/phishin-dev.sql?rlkey=4trafp2vxcgc1iuuq36yhl9gc&dl=1' \
-    --output "$sql_file"
+if [[ ! -r "$sql_file" ]]; then
+  echo "Seed SQL file is missing or unreadable: $sql_file" >&2
+  exit 2
+fi
+
+actual_sql_sha256="$(shasum -a 256 "$sql_file" | awk '{print $1}')"
+if [[ "$actual_sql_sha256" != "$expected_sql_sha256" ]]; then
+  echo "Seed SQL checksum mismatch; refusing to execute an unreviewed dump." >&2
+  echo "Expected: $expected_sql_sha256" >&2
+  echo "Actual:   $actual_sql_sha256" >&2
+  exit 2
 fi
 
 server_version_num="$(psql -XAtq --dbname=postgres --command='SHOW server_version_num')"
