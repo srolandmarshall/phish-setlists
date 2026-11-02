@@ -188,6 +188,10 @@ def _prepared_song_frequencies(
     if cache_key in cache:
         return cache[cache_key]
 
+    bind = session.get_bind()
+    if bind.dialect.name != "postgresql":
+        return None
+
     if session.info.get("_generation_song_pool_artifact_available") is False:
         return None
 
