@@ -108,7 +108,9 @@ class GenerateResponse(BaseModel):
 class GenerateRequestModel(BaseModel):
     reference_date: Optional[date] = None
     era: Optional[Literal["1.0", "2.0", "3.0", "4.0"]] = None
-    year: Optional[int] = Field(default_factory=lambda: datetime.now(timezone.utc).year)
+    # Resolve the default in the service layer so a historical reference_date
+    # does not inherit the current year and force the wrong era.
+    year: Optional[int] = None
     num_sets: int = Field(default=2, ge=2, le=3)
     include_encore: bool = True
     set_lengths: Optional[Dict[str, int]] = None
