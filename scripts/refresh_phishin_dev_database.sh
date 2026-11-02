@@ -2,10 +2,10 @@
 
 set -euo pipefail
 
-# Keep this checksum pinned to the reviewed seed snapshot in data/phishin-dev.sql.
+# Keep this checksum pinned to the reviewed local snapshot.
 expected_sql_sha256="855b57333b92484e4c0d0d0d3a025b787abbeb63455e564f733bbdd76d4c81d0"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-sql_file="${script_dir}/../data/phishin-dev.sql"
+sql_file="${PHISHIN_DEV_SQL_FILE:-${script_dir}/../data/phishin-dev.sql}"
 
 PGHOST="${PGHOST:-${DB_HOST:-localhost}}"
 PGPORT="${PGPORT:-${DB_PORT:-5432}}"

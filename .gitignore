@@ -1,6 +1,5 @@
 .env*
 data/*
-!data/phishin-dev.sql
 !data/analytics/
 !data/analytics/features/
 
