@@ -55,6 +55,22 @@ ls -lh data/analytics/features/
 # Should show: song_features.parquet, transition_lift.parquet, multi_home_songs.parquet
 ```
 
+### Refresh the local development database
+
+The Phish.in development SQL dump is a PostgreSQL 17+ snapshot. Refresh it into a **new database** so the configured database stays intact until you review the imported show counts:
+
+```bash
+# Export the database credentials already used by this project.
+set -a
+source .env
+set +a
+
+TARGET_DB=phish-setlist-maker-dev-20261101 \
+  scripts/refresh_phishin_dev_database.sh
+```
+
+The development SQL dump is large and is not checked into Git. By default, the script downloads the checksum-pinned snapshot from the private S3 object `s3://srm-builds/phish-setlists/database-seeds/phishin-dev.sql`; configure AWS CLI credentials with access to that object. To use a local copy instead, set `PHISHIN_DEV_SQL_FILE` to its path. The script verifies the reviewed snapshot's SHA-256 before importing it transactionally, adds the API's local `tracks` columns, and prints the total show range plus the 2025–2026 count. To use a newer dump, review it, overwrite this same S3 key, and update the expected checksum in the script; bucket versioning retains prior object versions. It refuses to execute a dump with a different checksum or overwrite an existing database, and removes a newly created target if restore fails. Use a PostgreSQL role with database creation and restore permissions. Once the counts look right, point the local API at the new database by setting `DB_NAME` in `.env` to the printed database name. The previous database remains available by switching `DB_NAME` back.
+
 ### Usage Options
 
 #### Option 1: Run the FastAPI Server
