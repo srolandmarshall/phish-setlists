@@ -345,6 +345,76 @@ def build_set_ending_frequencies(
     return result.sort_values(["canonical_set", "ending_count"], ascending=[True, False])
 
 
+def build_set_opening_frequencies(
+    frame: pd.DataFrame,
+    *,
+    allowed_sets: Optional[Iterable[str]] = None,
+) -> pd.DataFrame:
+    """Compute historical first-song probabilities by set and era.
+
+    The probability is the number of times a song opened that set divided by
+    the number of appearances of that song in the same set and era. An
+    additional ``era='all'`` row is emitted for each set/song as a fallback.
+    """
+    columns = [
+        "song_effective_title",
+        "canonical_set",
+        "era",
+        "opening_count",
+        "total_count",
+        "opening_probability",
+    ]
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+
+    required = ["show_id", "canonical_set", "position", "song_effective_title"]
+    if any(name not in frame.columns for name in required):
+        return pd.DataFrame(columns=columns)
+
+    filtered = frame.dropna(subset=required).copy()
+    if allowed_sets is not None:
+        filtered = filtered[filtered["canonical_set"].isin(allowed_sets)]
+    if filtered.empty:
+        return pd.DataFrame(columns=columns)
+
+    if "era" not in filtered.columns:
+        filtered["era"] = "unknown"
+    filtered["era"] = filtered["era"].fillna("unknown").astype(str)
+
+    openers = (
+        filtered.sort_values("position")
+        .groupby(["show_id", "canonical_set"], as_index=False)
+        .head(1)[["show_id", "canonical_set", "era", "song_effective_title"]]
+    )
+
+    def summarize(
+        opener_rows: pd.DataFrame,
+        appearance_rows: pd.DataFrame,
+        era_label: str,
+    ) -> pd.DataFrame:
+        openings = (
+            opener_rows.groupby(["song_effective_title", "canonical_set"])
+            .size()
+            .reset_index(name="opening_count")
+        )
+        appearances = appearance_rows.groupby(
+            ["song_effective_title", "canonical_set"]
+        ).size().reset_index(name="total_count")
+        result = openings.merge(appearances, on=["song_effective_title", "canonical_set"], how="left")
+        result["era"] = era_label
+        result["opening_probability"] = result["opening_count"] / result["total_count"]
+        return result[columns]
+
+    summaries = []
+    for era, opener_rows in openers.groupby("era", sort=True):
+        appearance_rows = filtered[filtered["era"] == era]
+        summaries.append(summarize(opener_rows, appearance_rows, era))
+    summaries.append(summarize(openers, filtered, "all"))
+    return pd.concat(summaries, ignore_index=True).sort_values(
+        ["era", "canonical_set", "opening_count"], ascending=[True, True, False]
+    )
+
+
 def _canonical_for_analysis(label: Optional[str]) -> Optional[str]:
     if not label:
         return None

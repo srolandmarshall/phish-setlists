@@ -84,6 +84,18 @@ class SetEndingFrequency:
     ending_probability: float
 
 
+@dataclass
+class SetOpeningFrequency:
+    """Frequency data for songs as set openers in one era."""
+
+    song_name: str
+    set_label: str
+    era: str
+    opening_count: int
+    total_count: int
+    opening_probability: float
+
+
 class FeatureStore:
     """In-memory cache of ML features for fast lookup."""
 
@@ -98,6 +110,7 @@ class FeatureStore:
         self._ordering_constraints: Optional[Dict[str, Set[str]]] = None  # song_a -> songs that must come after
         self._cross_set_dependencies: Optional[list[CrossSetDependency]] = None
         self._set_ending_frequencies: Optional[Dict[Tuple[str, str], SetEndingFrequency]] = None  # (song, set) -> freq data
+        self._set_opening_frequencies: Optional[Dict[Tuple[str, str, str], SetOpeningFrequency]] = None
 
     def load(self) -> None:
         """Load all feature tables into memory."""
@@ -108,6 +121,7 @@ class FeatureStore:
         self._load_ordering_constraints()
         self._load_cross_set_dependencies()
         self._load_set_ending_frequencies()
+        self._load_set_opening_frequencies()
         self._load_segue_groups()
 
     def _load_song_features(self) -> None:
@@ -275,6 +289,35 @@ class FeatureStore:
                 ending_count=int(row["ending_count"]),
                 total_count=int(row["total_count"]),
                 ending_probability=float(row["ending_probability"]),
+            )
+
+    def _load_set_opening_frequencies(self) -> None:
+        """Load era-aware set-opening frequency data, if it exists."""
+        openings_path = self.features_dir / "set_opening_frequencies.parquet"
+        if not openings_path.exists():
+            self._set_opening_frequencies = {}
+            return
+
+        df = pd.read_parquet(openings_path)
+        required = {
+            "song_effective_title", "canonical_set", "era", "opening_count",
+            "total_count", "opening_probability",
+        }
+        if not required.issubset(df.columns):
+            raise ValueError(
+                f"Invalid set-opening feature file {openings_path}: missing {sorted(required - set(df.columns))}"
+            )
+
+        self._set_opening_frequencies = {}
+        for _, row in df.iterrows():
+            key = (row["song_effective_title"], row["canonical_set"], str(row["era"]))
+            self._set_opening_frequencies[key] = SetOpeningFrequency(
+                song_name=row["song_effective_title"],
+                set_label=row["canonical_set"],
+                era=str(row["era"]),
+                opening_count=int(row["opening_count"]),
+                total_count=int(row["total_count"]),
+                opening_probability=float(row["opening_probability"]),
             )
 
     def get_song_features(self, song_name: str) -> Optional[SongFeatures]:
@@ -445,6 +488,30 @@ class FeatureStore:
             freq
             for (song, s_label), freq in self._set_ending_frequencies.items()
             if s_label == set_label and freq.ending_probability >= min_probability
+        ]
+
+    def get_set_openers_for_set(
+        self,
+        set_label: str,
+        *,
+        era: Optional[str] = None,
+        min_era_openings: int = 20,
+    ) -> list[SetOpeningFrequency]:
+        """Return opener stats for an era when history is sufficient, else all eras."""
+        if not self._set_opening_frequencies:
+            return []
+
+        if era:
+            era_rows = [
+                freq for (song, set_name, row_era), freq in self._set_opening_frequencies.items()
+                if set_name == set_label and row_era == era
+            ]
+            if sum(freq.opening_count for freq in era_rows) >= min_era_openings:
+                return era_rows
+
+        return [
+            freq for (song, set_name, row_era), freq in self._set_opening_frequencies.items()
+            if set_name == set_label and row_era == "all"
         ]
     
     def _load_segue_groups(self) -> None:
