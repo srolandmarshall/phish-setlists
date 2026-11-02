@@ -1,0 +1,48 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fast-tests:
+    name: Fast tests
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Poetry
+        run: pipx install poetry
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: poetry
+          cache-dependency-path: poetry.lock
+      - name: Install dependencies
+        run: poetry install --with dev --no-interaction --no-ansi
+      - name: Run fast tests
+        run: poetry run pytest tests/ -m "not slow"
+
+  full-tests:
+    name: Full test suite
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Poetry
+        run: pipx install poetry
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: poetry
+          cache-dependency-path: poetry.lock
+      - name: Install dependencies
+        run: poetry install --with dev --no-interaction --no-ansi
+      - name: Run full test suite
+        run: poetry run pytest tests/
