@@ -4,7 +4,7 @@ set -euo pipefail
 
 # Keep these values pinned to the reviewed S3 snapshot.
 expected_sql_sha256="855b57333b92484e4c0d0d0d3a025b787abbeb63455e564f733bbdd76d4c81d0"
-seed_s3_uri="${PHISHIN_DEV_SQL_S3_URI:-s3://srm-builds/phish-setlists/database-seeds/phishin-dev-2026-11-01.sql}"
+seed_s3_uri="${PHISHIN_DEV_SQL_S3_URI:-s3://srm-builds/phish-setlists/database-seeds/phishin-dev.sql}"
 sql_file="${PHISHIN_DEV_SQL_FILE:-}"
 temporary_sql=""
 
