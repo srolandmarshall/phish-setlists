@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from random import Random
 from statistics import mean, median
@@ -204,25 +204,39 @@ def segment_statistics(
 
     canonical_label = target_set
 
-    show_ids_subquery = filter_shows_query(
-        cutoff_date=cutoff_date,
-        era=era,
-        year=year,
-    ).subquery()
+    statistics_cache = session.info.setdefault("_generator_segment_statistics", {})
+    statistics_key = (canonical_label, cutoff_date, era, year, longform_threshold)
+    cached_statistics = statistics_cache.get(statistics_key)
+    if cached_statistics is not None:
+        return replace(
+            cached_statistics,
+            top_sequences=cached_statistics.top_sequences[:max(top_n_sequences, 0)],
+        )
 
-    track_stmt = (
-        select(Show.id, Show.date, Track.set, Track.position, Track.title, Track.duration)
-        .join(show_ids_subquery, Show.id == show_ids_subquery.c.id)
-        .join(Track, Track.show_id == Show.id)
-        .order_by(Show.date.asc(), Track.position.asc())
-    )
+    rows_cache = session.info.setdefault("_generator_segment_statistics_rows", {})
+    cache_key = (canonical_label, cutoff_date, era, year)
+    rows = rows_cache.get(cache_key)
+    if rows is None:
+        show_ids_subquery = filter_shows_query(
+            cutoff_date=cutoff_date,
+            era=era,
+            year=year,
+        ).subquery()
+        allowed_labels = {canonical_label.lower()}
+        allowed_labels.update(label.lower() for label in SET_ALIASES.get(canonical_label, ()))
+        track_stmt = (
+            select(Show.id, Show.date, Track.set, Track.position, Track.title, Track.duration)
+            .join(show_ids_subquery, Show.id == show_ids_subquery.c.id)
+            .join(Track, Track.show_id == Show.id)
+            .where(func.lower(func.trim(Track.set)).in_(allowed_labels))
+            .order_by(Show.date.asc(), Track.position.asc())
+        )
+        rows = tuple(tuple(row) for row in session.execute(track_stmt))
+        rows_cache[cache_key] = rows
 
     segments: Dict[Tuple[int, str], List[Tuple[int, str, float]]] = {}
     segment_dates: Dict[Tuple[int, str], date] = {}
-    for show_id, show_date, raw_label, position, title, duration in session.execute(track_stmt):
-        canonical = normalize_set_label(raw_label)
-        if canonical != canonical_label:
-            continue
+    for show_id, show_date, raw_label, position, title, duration in rows:
         seconds = (duration or 0) / 1000.0
         key = (show_id, raw_label)
         segments.setdefault(key, []).append((position, title, seconds))
@@ -263,7 +277,7 @@ def segment_statistics(
         count: mean(values) if values else 0.0 for count, values in duration_by_count.items()
     }
 
-    top_sequences = sequence_counter.most_common(top_n_sequences)
+    top_sequences = sequence_counter.most_common()
 
     adjacency_map: Dict[str, Dict[str, int]] = {}
     for sequence, weight in sequence_counter.items():
@@ -302,7 +316,7 @@ def segment_statistics(
         for title, values in song_duration_samples.items()
     }
 
-    return SegmentStatistics(
+    statistics = SegmentStatistics(
         label=canonical_label,
         patterns=patterns,
         count_histogram=dict(count_histogram),
@@ -315,6 +329,11 @@ def segment_statistics(
         song_durations_p50=song_durations_p50,
         song_durations_p70=song_durations_p70,
         song_durations_p90=song_durations_p90,
+    )
+    statistics_cache[statistics_key] = statistics
+    return replace(
+        statistics,
+        top_sequences=statistics.top_sequences[:max(top_n_sequences, 0)],
     )
 
 
