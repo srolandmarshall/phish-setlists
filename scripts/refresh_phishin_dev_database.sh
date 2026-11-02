@@ -2,10 +2,11 @@
 
 set -euo pipefail
 
-# Keep this checksum pinned to the reviewed local snapshot.
+# Keep these values pinned to the reviewed S3 snapshot.
 expected_sql_sha256="855b57333b92484e4c0d0d0d3a025b787abbeb63455e564f733bbdd76d4c81d0"
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-sql_file="${PHISHIN_DEV_SQL_FILE:-${script_dir}/../data/phishin-dev.sql}"
+seed_s3_uri="${PHISHIN_DEV_SQL_S3_URI:-s3://srm-builds/phish-setlists/database-seeds/phishin-dev-2026-11-01.sql}"
+sql_file="${PHISHIN_DEV_SQL_FILE:-}"
+temporary_sql=""
 
 PGHOST="${PGHOST:-${DB_HOST:-localhost}}"
 PGPORT="${PGPORT:-${DB_PORT:-5432}}"
@@ -31,12 +32,19 @@ cleanup() {
   if [[ "$database_created" == "1" && "$refresh_complete" != "1" ]]; then
     dropdb --if-exists --maintenance-db=postgres "$target_db" >/dev/null 2>&1 || true
   fi
+  if [[ -n "$temporary_sql" ]]; then
+    rm -f -- "$temporary_sql"
+  fi
   return "$status"
 }
 trap cleanup EXIT
 
-if [[ ! -r "$sql_file" ]]; then
-  echo "Seed SQL file is missing or unreadable: $sql_file" >&2
+if [[ -z "$sql_file" ]]; then
+  temporary_sql="$(mktemp "${TMPDIR:-/tmp}/phishin-dev.XXXXXX.sql")"
+  sql_file="$temporary_sql"
+  aws s3 cp "$seed_s3_uri" "$sql_file" --no-progress
+elif [[ ! -r "$sql_file" ]]; then
+  echo "PHISHIN_DEV_SQL_FILE is not readable: $sql_file" >&2
   exit 2
 fi
 
