@@ -593,7 +593,14 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
     start_time = time.time()
     logger.info("⏱️  Generation started")
 
-    effective_era, era_adjustment = resolve_era(request.year, request.era)
+    current_year = datetime.now().year
+    generation_year = request.year
+    if generation_year is None:
+        generation_year = (
+            request.reference_date.year if request.reference_date else current_year
+        )
+
+    effective_era, era_adjustment = resolve_era(generation_year, request.era)
 
     seed = request.seed if request.seed is not None else SystemRandom().randint(0, 2**32 - 1)
     rng = Random(seed)
@@ -612,8 +619,7 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
         pass
 
     allow_previous_show = request.allow_previous_show
-    current_year = datetime.now().year
-    if request.year is not None and request.year < current_year and not request.allow_previous_show:
+    if generation_year < current_year and not request.allow_previous_show:
         allow_previous_show = True
 
     generator = SetlistGenerator(
@@ -633,7 +639,7 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
             session,
             reference_date=request.reference_date,
             era=effective_era,
-            year=request.year,
+            year=generation_year,
             num_sets=request.num_sets,
             include_encore=request.include_encore,
             rng=length_rng,
@@ -643,7 +649,7 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
     generated = generator.generate(
         reference_date=request.reference_date,
         era=effective_era,
-        year=request.year,
+        year=generation_year,
         num_sets=request.num_sets,
         include_encore=request.include_encore,
         set_lengths=set_lengths,
