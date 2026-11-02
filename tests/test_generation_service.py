@@ -228,3 +228,36 @@ def test_generate_show_duration_notes_use_actual_times(
     assert result.generated.metadata.notes == [
         "Capped Set 1 at 2 songs (~105:00) to respect duration target."
     ]
+
+
+def test_generate_show_skips_track_prefetch_when_playlist_is_disabled(
+    db_session,
+    mocker: MockerFixture,
+) -> None:
+    """A no-playlist request should not build a catalog or prefetch audio metadata."""
+    fake_metadata = GenerationMetadata(
+        reference_date=date(2024, 1, 1),
+        cutoff_date=date(2024, 1, 1),
+        era="4.0",
+        year=2024,
+        notes=[],
+    )
+    fake_generated = GeneratedSetlist(
+        sets=[SetSegment(label="Set 1", songs=["Song A"])],
+        encore=None,
+        metadata=fake_metadata,
+    )
+    generator_cls = mocker.patch("phish_setlist_maker.service.generation.SetlistGenerator")
+    generator_cls.return_value.generate.return_value = fake_generated
+    build_catalog = mocker.patch("phish_setlist_maker.service.generation.build_song_catalog")
+
+    request = GenerationRequest(
+        year=2024,
+        include_playlist=False,
+        seed=9,
+    )
+
+    result = generate_show(db_session, request)
+
+    assert result.playlist is None
+    build_catalog.assert_not_called()
