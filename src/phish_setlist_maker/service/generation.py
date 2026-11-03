@@ -632,6 +632,7 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
         same_show_segues=request.same_show_segues,
     )
 
+    t_lengths = time.perf_counter()
     if request.set_lengths:
         set_lengths = dict(request.set_lengths)
     else:
@@ -644,6 +645,7 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
             include_encore=request.include_encore,
             rng=length_rng,
         )
+    logger.info("⏱️  Set-length selection took %.2fs", time.perf_counter() - t_lengths)
 
     t1 = time.time()
     generated = generator.generate(

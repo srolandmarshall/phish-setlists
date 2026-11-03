@@ -10,9 +10,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
 from typing import Dict, Optional, Set, Tuple
 
 import pandas as pd
+
+_PROCESS_FEATURE_STORES: Dict[Path, "FeatureStore"] = {}
+_PROCESS_FEATURE_STORES_LOCK = RLock()
 
 
 @dataclass
@@ -109,6 +113,12 @@ class FeatureStore:
         self._load_cross_set_dependencies()
         self._load_set_ending_frequencies()
         self._load_segue_groups()
+
+    @classmethod
+    def clear_cache(cls) -> None:
+        """Drop process-cached stores so later generators reload feature files."""
+        with _PROCESS_FEATURE_STORES_LOCK:
+            _PROCESS_FEATURE_STORES.clear()
 
     def _load_song_features(self) -> None:
         """Load song-level features from parquet."""
@@ -680,3 +690,15 @@ class FeatureStore:
                 break
 
         return result
+
+
+def get_process_feature_store(features_dir: Path) -> FeatureStore:
+    """Return the shared, loaded feature store for this worker and directory."""
+    cache_key = Path(features_dir).resolve()
+    with _PROCESS_FEATURE_STORES_LOCK:
+        store = _PROCESS_FEATURE_STORES.get(cache_key)
+        if store is None:
+            store = FeatureStore(cache_key)
+            store.load()
+            _PROCESS_FEATURE_STORES[cache_key] = store
+        return store

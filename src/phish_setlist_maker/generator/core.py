@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger("uvicorn.error")
 
-from ..analysis.feature_store import FeatureStore
+from ..analysis.feature_store import FeatureStore, get_process_feature_store
 from ..constants import (
     DEFAULT_SET_DURATION_TARGETS,
     DEFAULT_SET_LENGTHS,
@@ -102,8 +102,7 @@ class SetlistGenerator:
                 features_dir = Path(__file__).resolve().parent.parent.parent.parent / "data" / "analytics" / "features"
             if not features_dir.exists():
                 raise RuntimeError(f"ML features directory not found: {features_dir}")
-            self._feature_store = FeatureStore(features_dir)
-            self._feature_store.load()
+            self._feature_store = get_process_feature_store(features_dir)
         
         # Load excluded songs (always loaded, not just for ML)
         self._excluded_songs: Set[str] = self._load_excluded_songs()
