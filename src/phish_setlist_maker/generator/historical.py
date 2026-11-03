@@ -5,13 +5,14 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date
+import logging
 from random import Random
 from statistics import mean, median
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy.sql import Select
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from ..constants import (
@@ -23,6 +24,8 @@ from ..constants import (
 )
 from ..models import Show, Song, SongTrack, Track
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class SongFrequency:
@@ -30,10 +33,15 @@ class SongFrequency:
 
     title: str
     count: int
+    placement_probability: Optional[float] = None
 
     @property
     def weight(self) -> float:
-        return float(self.count)
+        return (
+            self.placement_probability
+            if self.placement_probability is not None
+            else float(self.count)
+        )
 
 
 def normalize_set_label(label: str) -> str:
@@ -128,6 +136,10 @@ def song_frequencies_by_set(
 ) -> Dict[str, List[SongFrequency]]:
     """Compute song appearance frequencies keyed by normalized set label."""
 
+    prepared = _prepared_song_frequencies(session, cutoff_date, era, year)
+    if prepared is not None:
+        return prepared
+
     show_ids_subquery = filter_shows_query(
         cutoff_date=cutoff_date,
         era=era,
@@ -157,6 +169,90 @@ def song_frequencies_by_set(
             for title, count in counter.most_common()
         ]
 
+    return frequencies
+
+
+def _prepared_song_frequencies(
+    session: Session,
+    cutoff_date: Optional[date],
+    era: Optional[str],
+    year: Optional[int],
+) -> Optional[Dict[str, List[SongFrequency]]]:
+    """Load date/era-scoped counts from the refresh-built snapshot table.
+
+    ``None`` means the artifact is missing or stale, so callers use the direct
+    historical query. An empty mapping is a valid snapshot with no eligible rows.
+    """
+    cache = session.info.setdefault("_prepared_song_pool_cache", {})
+    cache_key = (cutoff_date, era, year)
+    if cache_key in cache:
+        return cache[cache_key]
+
+    bind = session.get_bind()
+    if bind.dialect.name != "postgresql":
+        return None
+
+    if session.info.get("_generation_song_pool_artifact_available") is False:
+        return None
+
+    if session.info.get("_generation_song_pool_artifact_available") is None:
+        exists = session.execute(text("""
+            SELECT to_regclass('public.generation_song_pool_snapshots') IS NOT NULL
+               AND to_regclass('public.generation_song_pool_metadata') IS NOT NULL
+        """)).scalar_one()
+        if not exists:
+            session.info["_generation_song_pool_artifact_available"] = False
+            logger.warning("Prepared song-pool artifacts are missing; using direct historical queries")
+            return None
+
+        fresh = session.execute(text("""
+            SELECT source_signature <> 'stale'
+              FROM public.generation_song_pool_metadata
+             WHERE singleton
+        """)).scalar_one_or_none()
+        if not fresh:
+            session.info["_generation_song_pool_artifact_available"] = False
+            logger.warning("Prepared song-pool artifacts are stale; using direct historical queries")
+            return None
+        session.info["_generation_song_pool_artifact_available"] = True
+
+    effective_cutoff = cutoff_date
+    if year:
+        year_end = date(year, 12, 31)
+        effective_cutoff = min(effective_cutoff, year_end) if effective_cutoff else year_end
+    snapshot_era = era if era in ERA_DEFINITIONS else "all"
+    params = {"era": snapshot_era, "cutoff": effective_cutoff}
+    rows = session.execute(text("""
+        SELECT snapshot.canonical_set, snapshot.song_title, snapshot.appearance_count,
+               snapshot.placement_probability
+          FROM public.generation_song_pool_snapshots snapshot
+          JOIN (
+              SELECT max(snapshot_date) AS snapshot_date
+                FROM public.generation_song_pool_snapshots
+               WHERE era = :era AND (:cutoff IS NULL OR snapshot_date <= :cutoff)
+          ) latest ON snapshot.snapshot_date = latest.snapshot_date
+         WHERE snapshot.era = :era
+         ORDER BY snapshot.canonical_set, snapshot.appearance_count DESC, snapshot.song_title
+    """), params)
+
+    materialized: Dict[str, List[Tuple[str, int, float]]] = {}
+    for canonical_set, title, count, placement_probability in rows:
+        materialized.setdefault(canonical_set, []).append(
+            (title, count, placement_probability)
+        )
+
+    frequencies = {
+        canonical_set: [
+            SongFrequency(
+                title=title,
+                count=count,
+                placement_probability=placement_probability,
+            )
+            for title, count, placement_probability in songs
+        ]
+        for canonical_set, songs in materialized.items()
+    }
+    cache[cache_key] = frequencies
     return frequencies
 
 
@@ -353,6 +449,10 @@ def songs_seen_by_date(
     year: Optional[int] = None,
 ) -> Iterable[str]:
     """Return the set of song titles that have appeared up to ``cutoff``."""
+
+    prepared = _prepared_song_frequencies(session, cutoff, era, year)
+    if prepared is not None:
+        return {song.title for songs in prepared.values() for song in songs}
 
     show_ids = filter_shows_query(
         cutoff_date=cutoff,

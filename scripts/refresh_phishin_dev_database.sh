@@ -82,8 +82,13 @@ ALTER TABLE public.tracks ADD COLUMN IF NOT EXISTS audio_file_data text;
 ALTER TABLE public.tracks ADD COLUMN IF NOT EXISTS waveform_png_data text;
 SQL
 
+# Build date/era-specific song pools and placement probabilities from this snapshot.
+psql -X --set ON_ERROR_STOP=on --dbname="$target_db" \
+  --file="$(dirname "$0")/precompute_generation_song_pools.sql"
+
 psql -X --set ON_ERROR_STOP=on --dbname="$target_db" \
   --command="SELECT COUNT(*) AS show_count, MIN(date) AS first_show, MAX(date) AS latest_show FROM public.shows" \
+  --command="SELECT COUNT(*) AS prepared_song_pool_rows, COUNT(DISTINCT (snapshot_date, era)) AS snapshots FROM public.generation_song_pool_snapshots" \
   --command="SELECT COUNT(*) AS shows_2025_2026 FROM public.shows WHERE date >= DATE '2025-01-01' AND date < DATE '2027-01-01'"
 
 refresh_complete=1
