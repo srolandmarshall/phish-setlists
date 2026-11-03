@@ -17,6 +17,340 @@ from .tracks import query_tracks_for_song
 
 logger = logging.getLogger("uvicorn.error")
 
+
+def _process_segment_tracks(
+    segments: Sequence[SetSegment],
+    encore: Optional[SetSegment],
+    append_track_with_injection: Callable[..., None],
+) -> None:
+    """Resolve track displays for each generated segment in set order."""
+    for segment in segments:
+        from ..generator.historical import normalize_set_label
+        canonical = normalize_set_label(segment.label) if segment.label else None
+
+        # Flatten segment songs for indexing
+        segment_songs_flat = []
+        for raw_song in segment.songs:
+            segment_songs_flat.extend(split_song_titles(raw_song))
+
+        song_idx = 0
+        for idx, raw_song in enumerate(segment.songs):
+            is_last = (idx == len(segment.songs) - 1)
+            for title in split_song_titles(raw_song):
+                append_track_with_injection(
+                    title,
+                    is_set_ender=is_last,
+                    canonical_set=canonical,
+                    current_segment_songs=segment_songs_flat,
+                    current_song_index=song_idx,
+                    segment_label=segment.label
+                )
+                song_idx += 1
+
+    if encore:
+        # Flatten encore songs for indexing
+        encore_songs_flat = []
+        for raw_song in encore.songs:
+            encore_songs_flat.extend(split_song_titles(raw_song))
+
+        song_idx = 0
+        for idx, raw_song in enumerate(encore.songs):
+            is_last = (idx == len(encore.songs) - 1)
+            for title in split_song_titles(raw_song):
+                append_track_with_injection(
+                    title,
+                    is_set_ender=is_last,
+                    canonical_set="encore",
+                    current_segment_songs=encore_songs_flat,
+                    current_song_index=song_idx,
+                    segment_label=encore.label
+                )
+                song_idx += 1
+
+
+def _build_sections(
+    db_session: Session,
+    segments: Sequence[SetSegment],
+    encore: Optional[SetSegment],
+    *,
+    catalog: SongCatalog,
+    track_cache: Dict[str, Optional[SongDisplay]],
+    songs_to_skip: Set[Tuple[str, str]],
+    mandatory_injected_songs: Set[Tuple[str, str]],
+    feature_store,
+    rng: Random,
+) -> List[Tuple[str, List[SongDisplay]]]:
+    """Assemble display rows from selected tracks and injected continuations."""
+    sections: List[Tuple[str, List[SongDisplay]]] = []
+    for segment in segments:
+        rows: List[SongDisplay] = []
+        for raw_song in segment.songs:
+            for title in split_song_titles(raw_song):
+                # Skip songs that were removed to compensate for lottery ticket injections IN THIS SEGMENT
+                if (segment.label, title) in songs_to_skip:
+                    logger.info("⏭️  Skipping %s/%s in sections building (lottery compensation)", segment.label, title)
+                    continue
+
+                # Skip songs that were already injected as mandatory continuations
+                if (segment.label, title) in mandatory_injected_songs:
+                    logger.info("⏭️  Skipping %s/%s in sections building (already injected as mandatory)", segment.label, title)
+                    continue
+
+                key = normalize_title(title)
+                display = track_cache.get(key)
+                if display:
+                    rows.append(display)
+
+                    # If this track has rare segue continuations, add them to the section
+                    if display.rare_segue_next_tracks and feature_store:
+                        from ..models import Track, SongTrack, Song
+                        for next_track_id in display.rare_segue_next_tracks:
+                            # Check if already added to THIS section's rows
+                            if any(r.track_id == next_track_id for r in rows):
+                                continue
+
+                            track_row = db_session.query(
+                                Track.id, Track.slug, Track.duration, Track.likes_count,
+                                Track.metadata_cache, Track.show_id, Track.set, Track.position
+                            ).filter(Track.id == next_track_id).first()
+                            if not track_row:
+                                continue
+
+                            song_track = db_session.query(SongTrack).filter(SongTrack.track_id == next_track_id).first()
+                            if not song_track:
+                                continue
+                            song = db_session.query(Song).filter(Song.id == song_track.song_id).first()
+                            if not song:
+                                continue
+
+                            from .tracks import CandidateTrack, resolve_track_metadata
+                            candidate = CandidateTrack(
+                                track_id=next_track_id,
+                                slug=track_row.slug,
+                                duration=track_row.duration,
+                                show_date=None,
+                                likes_count=track_row.likes_count or 0,
+                                metadata_cache=track_row.metadata_cache,
+                            )
+
+                            mp3_url, remote_duration, remote_show_date = resolve_track_metadata(
+                                db_session, candidate, song_slug=song.slug, rng=rng, strict=False
+                            )
+
+                            if mp3_url:
+                                duration_seconds = candidate.duration if candidate.duration else remote_duration
+                                if duration_seconds and duration_seconds > 6000:
+                                    duration_seconds = duration_seconds // 1000
+                                show_date_str = remote_show_date or "unknown"
+
+                                # Try to get origin from catalog
+                                origin_key = normalize_title(song.title)
+                                origin_entry = catalog.by_title.get(origin_key)
+                                origin = determine_origin_from_entry(origin_entry) if origin_entry else None
+
+                                continuation_display = SongDisplay(
+                                    title=song.title,
+                                    mp3_url=mp3_url,
+                                    duration_seconds=duration_seconds,
+                                    origin=origin,
+                                    show_date=show_date_str,
+                                    track_id=next_track_id,
+                                    is_segue=True,
+                                    segue_type="lottery_ticket",
+                                    segue_pattern=display.segue_pattern,
+                                    segue_position=2 if len(rows) == 1 else len(rows) + 1,
+                                    segue_group_id=display.segue_group_id,
+                                    historical_occurrences=display.historical_occurrences,
+                                    rarity_score=display.rarity_score,
+                                    likes_count=display.likes_count,
+                                )
+                                rows.append(continuation_display)
+
+                    # If this track has mandatory pattern continuations, add them to the section
+                    if display.mandatory_pattern_songs and feature_store:
+                        from ..models import Track, SongTrack, Song
+                        for i, pattern_song in enumerate(display.mandatory_pattern_songs):
+                            # Get track_id (either from list or need to query)
+                            if display.mandatory_next_tracks and i < len(display.mandatory_next_tracks):
+                                next_track_id = display.mandatory_next_tracks[i]
+                            else:
+                                # Already injected in M3U phase, should be in track_cache
+                                cache_key = normalize_title(pattern_song)
+                                if cache_key in track_cache:
+                                    cached_display = track_cache.get(cache_key)
+                                    if cached_display and cached_display.track_id:
+                                        next_track_id = cached_display.track_id
+                                    else:
+                                        continue
+                                else:
+                                    continue
+
+                            # Check if already added to THIS section's rows
+                            if any(r.track_id == next_track_id for r in rows):
+                                continue
+
+                            # Get from cache or fetch
+                            cache_key = normalize_title(pattern_song)
+                            if cache_key in track_cache:
+                                continuation_display = track_cache.get(cache_key)
+                                if continuation_display:
+                                    rows.append(continuation_display)
+                            else:
+                                # Shouldn't happen, but handle it
+                                logger.warning("Mandatory continuation track not in cache: %s", pattern_song)
+
+                else:
+                    entry = catalog.by_title.get(key)
+                    origin = determine_origin_from_entry(entry) if entry else None
+                    rows.append(SongDisplay(title=title, origin=origin))
+        sections.append((segment.label, rows))
+
+    if encore:
+        encore_rows: List[SongDisplay] = []
+        for raw_song in encore.songs:
+            for title in split_song_titles(raw_song):
+                # Skip songs that were removed to compensate for lottery ticket injections IN ENCORE
+                if (encore.label, title) in songs_to_skip:
+                    logger.info("⏭️  Skipping %s/%s in encore building (lottery compensation)", encore.label, title)
+                    continue
+
+                # Skip songs that were already injected as mandatory continuations
+                if (encore.label, title) in mandatory_injected_songs:
+                    logger.info("⏭️  Skipping %s/%s in encore building (already injected as mandatory)", encore.label, title)
+                    continue
+
+                key = normalize_title(title)
+                display = track_cache.get(key)
+                if display:
+                    encore_rows.append(display)
+
+                    # If this track has rare segue continuations, add them to the encore
+                    if display.rare_segue_next_tracks and feature_store:
+                        from ..models import Track, SongTrack, Song
+                        for next_track_id in display.rare_segue_next_tracks:
+                            # Check if already added to encore rows
+                            if any(r.track_id == next_track_id for r in encore_rows):
+                                continue
+
+                            track_row = db_session.query(
+                                Track.id, Track.slug, Track.duration, Track.likes_count,
+                                Track.metadata_cache, Track.show_id, Track.set, Track.position
+                            ).filter(Track.id == next_track_id).first()
+                            if not track_row:
+                                continue
+
+                            song_track = db_session.query(SongTrack).filter(SongTrack.track_id == next_track_id).first()
+                            if not song_track:
+                                continue
+                            song = db_session.query(Song).filter(Song.id == song_track.song_id).first()
+                            if not song:
+                                continue
+
+                            from .tracks import CandidateTrack, resolve_track_metadata
+                            candidate = CandidateTrack(
+                                track_id=next_track_id,
+                                slug=track_row.slug,
+                                duration=track_row.duration,
+                                show_date=None,
+                                likes_count=track_row.likes_count or 0,
+                                metadata_cache=track_row.metadata_cache,
+                            )
+
+                            mp3_url, remote_duration, remote_show_date = resolve_track_metadata(
+                                db_session, candidate, song_slug=song.slug, rng=rng, strict=False
+                            )
+
+                            if mp3_url:
+                                duration_seconds = candidate.duration if candidate.duration else remote_duration
+                                if duration_seconds and duration_seconds > 6000:
+                                    duration_seconds = duration_seconds // 1000
+                                show_date_str = remote_show_date or "unknown"
+
+                                # Try to get origin from catalog
+                                origin_key = normalize_title(song.title)
+                                origin_entry = catalog.by_title.get(origin_key)
+                                origin = determine_origin_from_entry(origin_entry) if origin_entry else None
+
+                                continuation_display = SongDisplay(
+                                    title=song.title,
+                                    mp3_url=mp3_url,
+                                    duration_seconds=duration_seconds,
+                                    origin=origin,
+                                    show_date=show_date_str,
+                                    track_id=next_track_id,
+                                    is_segue=True,
+                                    segue_type="lottery_ticket",
+                                    segue_pattern=display.segue_pattern,
+                                    segue_position=len(encore_rows) + 1,
+                                    segue_group_id=display.segue_group_id,
+                                    historical_occurrences=display.historical_occurrences,
+                                    rarity_score=display.rarity_score,
+                                    likes_count=display.likes_count,
+                                )
+                                encore_rows.append(continuation_display)
+
+                    # If this track has mandatory pattern continuations, add them to encore
+                    if display.mandatory_pattern_songs and feature_store:
+                        from ..models import Track, SongTrack, Song
+                        for i, pattern_song in enumerate(display.mandatory_pattern_songs):
+                            # Get track_id (either from list or need to query)
+                            if display.mandatory_next_tracks and i < len(display.mandatory_next_tracks):
+                                next_track_id = display.mandatory_next_tracks[i]
+                            else:
+                                # Already injected in M3U phase, should be in track_cache
+                                cache_key = normalize_title(pattern_song)
+                                if cache_key in track_cache:
+                                    cached_display = track_cache.get(cache_key)
+                                    if cached_display and cached_display.track_id:
+                                        next_track_id = cached_display.track_id
+                                    else:
+                                        continue
+                                else:
+                                    continue
+
+                            # Check if already added to encore rows
+                            if any(r.track_id == next_track_id for r in encore_rows):
+                                continue
+
+                            # Get from cache or fetch
+                            cache_key = normalize_title(pattern_song)
+                            if cache_key in track_cache:
+                                continuation_display = track_cache.get(cache_key)
+                                if continuation_display:
+                                    encore_rows.append(continuation_display)
+                            else:
+                                # Shouldn't happen, but handle it
+                                logger.warning("Mandatory continuation track not in cache: %s", pattern_song)
+
+                else:
+                    entry = catalog.by_title.get(key)
+                    origin = determine_origin_from_entry(entry) if entry else None
+                    encore_rows.append(SongDisplay(title=title, origin=origin))
+        sections.append((encore.label, encore_rows))
+
+    return sections
+
+
+def _render_m3u(
+    sections: Sequence[Tuple[str, List[SongDisplay]]], include_m3u: bool
+) -> Optional[str]:
+    """Serialize final section rows into an M3U playlist when requested."""
+    if not include_m3u:
+        return None
+
+    lines = ["#EXTM3U"]
+    for _section_label, section_tracks in sections:
+        for track in section_tracks:
+            if not track.mp3_url:
+                continue
+            duration_sec = track.duration_seconds if track.duration_seconds is not None else -1
+            show_date = track.show_date or "unknown date"
+            segue_tag = " (rare segue)" if track.segue_type == "lottery_ticket" else ""
+            lines.append(f"#EXTINF:{duration_sec},{track.title} [{show_date}]{segue_tag}")
+            lines.append(track.mp3_url)
+    return "\n".join(lines)
+
+
 def build_playlist_artifacts(
     db_session: Session,
     segments: Sequence[SetSegment],
@@ -511,311 +845,21 @@ def build_playlist_artifacts(
                     ", ".join(f"{label}/{title}" for label, title in to_skip)
                 )
 
-    for segment in segments:
-        from ..generator.historical import normalize_set_label
-        canonical = normalize_set_label(segment.label) if segment.label else None
+    _process_segment_tracks(segments, encore, append_track_with_injection)
 
-        # Flatten segment songs for indexing
-        segment_songs_flat = []
-        for raw_song in segment.songs:
-            segment_songs_flat.extend(split_song_titles(raw_song))
+    sections = _build_sections(
+        db_session,
+        segments,
+        encore,
+        catalog=catalog,
+        track_cache=track_cache,
+        songs_to_skip=songs_to_skip,
+        mandatory_injected_songs=mandatory_injected_songs,
+        feature_store=feature_store,
+        rng=rng,
+    )
 
-        song_idx = 0
-        for idx, raw_song in enumerate(segment.songs):
-            is_last = (idx == len(segment.songs) - 1)
-            for title in split_song_titles(raw_song):
-                append_track_with_injection(
-                    title,
-                    is_set_ender=is_last,
-                    canonical_set=canonical,
-                    current_segment_songs=segment_songs_flat,
-                    current_song_index=song_idx,
-                    segment_label=segment.label
-                )
-                song_idx += 1
-
-    if encore:
-        # Flatten encore songs for indexing
-        encore_songs_flat = []
-        for raw_song in encore.songs:
-            encore_songs_flat.extend(split_song_titles(raw_song))
-
-        song_idx = 0
-        for idx, raw_song in enumerate(encore.songs):
-            is_last = (idx == len(encore.songs) - 1)
-            for title in split_song_titles(raw_song):
-                append_track_with_injection(
-                    title,
-                    is_set_ender=is_last,
-                    canonical_set="encore",
-                    current_segment_songs=encore_songs_flat,
-                    current_song_index=song_idx,
-                    segment_label=encore.label
-                )
-                song_idx += 1
-
-    sections: List[Tuple[str, List[SongDisplay]]] = []
-    for segment in segments:
-        rows: List[SongDisplay] = []
-        for raw_song in segment.songs:
-            for title in split_song_titles(raw_song):
-                # Skip songs that were removed to compensate for lottery ticket injections IN THIS SEGMENT
-                if (segment.label, title) in songs_to_skip:
-                    logger.info("⏭️  Skipping %s/%s in sections building (lottery compensation)", segment.label, title)
-                    continue
-
-                # Skip songs that were already injected as mandatory continuations
-                if (segment.label, title) in mandatory_injected_songs:
-                    logger.info("⏭️  Skipping %s/%s in sections building (already injected as mandatory)", segment.label, title)
-                    continue
-
-                key = normalize_title(title)
-                display = track_cache.get(key)
-                if display:
-                    rows.append(display)
-
-                    # If this track has rare segue continuations, add them to the section
-                    if display.rare_segue_next_tracks and feature_store:
-                        from ..models import Track, SongTrack, Song
-                        for next_track_id in display.rare_segue_next_tracks:
-                            # Check if already added to THIS section's rows
-                            if any(r.track_id == next_track_id for r in rows):
-                                continue
-
-                            track_row = db_session.query(
-                                Track.id, Track.slug, Track.duration, Track.likes_count,
-                                Track.metadata_cache, Track.show_id, Track.set, Track.position
-                            ).filter(Track.id == next_track_id).first()
-                            if not track_row:
-                                continue
-
-                            song_track = db_session.query(SongTrack).filter(SongTrack.track_id == next_track_id).first()
-                            if not song_track:
-                                continue
-                            song = db_session.query(Song).filter(Song.id == song_track.song_id).first()
-                            if not song:
-                                continue
-
-                            from .tracks import CandidateTrack, resolve_track_metadata
-                            candidate = CandidateTrack(
-                                track_id=next_track_id,
-                                slug=track_row.slug,
-                                duration=track_row.duration,
-                                show_date=None,
-                                likes_count=track_row.likes_count or 0,
-                                metadata_cache=track_row.metadata_cache,
-                            )
-
-                            mp3_url, remote_duration, remote_show_date = resolve_track_metadata(
-                                db_session, candidate, song_slug=song.slug, rng=rng, strict=False
-                            )
-
-                            if mp3_url:
-                                duration_seconds = candidate.duration if candidate.duration else remote_duration
-                                if duration_seconds and duration_seconds > 6000:
-                                    duration_seconds = duration_seconds // 1000
-                                show_date_str = remote_show_date or "unknown"
-
-                                # Try to get origin from catalog
-                                origin_key = normalize_title(song.title)
-                                origin_entry = catalog.by_title.get(origin_key)
-                                origin = determine_origin_from_entry(origin_entry) if origin_entry else None
-
-                                continuation_display = SongDisplay(
-                                    title=song.title,
-                                    mp3_url=mp3_url,
-                                    duration_seconds=duration_seconds,
-                                    origin=origin,
-                                    show_date=show_date_str,
-                                    track_id=next_track_id,
-                                    is_segue=True,
-                                    segue_type="lottery_ticket",
-                                    segue_pattern=display.segue_pattern,
-                                    segue_position=2 if len(rows) == 1 else len(rows) + 1,
-                                    segue_group_id=display.segue_group_id,
-                                    historical_occurrences=display.historical_occurrences,
-                                    rarity_score=display.rarity_score,
-                                    likes_count=display.likes_count,
-                                )
-                                rows.append(continuation_display)
-
-                    # If this track has mandatory pattern continuations, add them to the section
-                    if display.mandatory_pattern_songs and feature_store:
-                        from ..models import Track, SongTrack, Song
-                        for i, pattern_song in enumerate(display.mandatory_pattern_songs):
-                            # Get track_id (either from list or need to query)
-                            if display.mandatory_next_tracks and i < len(display.mandatory_next_tracks):
-                                next_track_id = display.mandatory_next_tracks[i]
-                            else:
-                                # Already injected in M3U phase, should be in track_cache
-                                cache_key = normalize_title(pattern_song)
-                                if cache_key in track_cache:
-                                    cached_display = track_cache.get(cache_key)
-                                    if cached_display and cached_display.track_id:
-                                        next_track_id = cached_display.track_id
-                                    else:
-                                        continue
-                                else:
-                                    continue
-
-                            # Check if already added to THIS section's rows
-                            if any(r.track_id == next_track_id for r in rows):
-                                continue
-
-                            # Get from cache or fetch
-                            cache_key = normalize_title(pattern_song)
-                            if cache_key in track_cache:
-                                continuation_display = track_cache.get(cache_key)
-                                if continuation_display:
-                                    rows.append(continuation_display)
-                            else:
-                                # Shouldn't happen, but handle it
-                                logger.warning("Mandatory continuation track not in cache: %s", pattern_song)
-
-                else:
-                    entry = catalog.by_title.get(key)
-                    origin = determine_origin_from_entry(entry) if entry else None
-                    rows.append(SongDisplay(title=title, origin=origin))
-        sections.append((segment.label, rows))
-
-    if encore:
-        encore_rows: List[SongDisplay] = []
-        for raw_song in encore.songs:
-            for title in split_song_titles(raw_song):
-                # Skip songs that were removed to compensate for lottery ticket injections IN ENCORE
-                if (encore.label, title) in songs_to_skip:
-                    logger.info("⏭️  Skipping %s/%s in encore building (lottery compensation)", encore.label, title)
-                    continue
-
-                # Skip songs that were already injected as mandatory continuations
-                if (encore.label, title) in mandatory_injected_songs:
-                    logger.info("⏭️  Skipping %s/%s in encore building (already injected as mandatory)", encore.label, title)
-                    continue
-
-                key = normalize_title(title)
-                display = track_cache.get(key)
-                if display:
-                    encore_rows.append(display)
-
-                    # If this track has rare segue continuations, add them to the encore
-                    if display.rare_segue_next_tracks and feature_store:
-                        from ..models import Track, SongTrack, Song
-                        for next_track_id in display.rare_segue_next_tracks:
-                            # Check if already added to encore rows
-                            if any(r.track_id == next_track_id for r in encore_rows):
-                                continue
-
-                            track_row = db_session.query(
-                                Track.id, Track.slug, Track.duration, Track.likes_count,
-                                Track.metadata_cache, Track.show_id, Track.set, Track.position
-                            ).filter(Track.id == next_track_id).first()
-                            if not track_row:
-                                continue
-
-                            song_track = db_session.query(SongTrack).filter(SongTrack.track_id == next_track_id).first()
-                            if not song_track:
-                                continue
-                            song = db_session.query(Song).filter(Song.id == song_track.song_id).first()
-                            if not song:
-                                continue
-
-                            from .tracks import CandidateTrack, resolve_track_metadata
-                            candidate = CandidateTrack(
-                                track_id=next_track_id,
-                                slug=track_row.slug,
-                                duration=track_row.duration,
-                                show_date=None,
-                                likes_count=track_row.likes_count or 0,
-                                metadata_cache=track_row.metadata_cache,
-                            )
-
-                            mp3_url, remote_duration, remote_show_date = resolve_track_metadata(
-                                db_session, candidate, song_slug=song.slug, rng=rng, strict=False
-                            )
-
-                            if mp3_url:
-                                duration_seconds = candidate.duration if candidate.duration else remote_duration
-                                if duration_seconds and duration_seconds > 6000:
-                                    duration_seconds = duration_seconds // 1000
-                                show_date_str = remote_show_date or "unknown"
-
-                                # Try to get origin from catalog
-                                origin_key = normalize_title(song.title)
-                                origin_entry = catalog.by_title.get(origin_key)
-                                origin = determine_origin_from_entry(origin_entry) if origin_entry else None
-
-                                continuation_display = SongDisplay(
-                                    title=song.title,
-                                    mp3_url=mp3_url,
-                                    duration_seconds=duration_seconds,
-                                    origin=origin,
-                                    show_date=show_date_str,
-                                    track_id=next_track_id,
-                                    is_segue=True,
-                                    segue_type="lottery_ticket",
-                                    segue_pattern=display.segue_pattern,
-                                    segue_position=len(encore_rows) + 1,
-                                    segue_group_id=display.segue_group_id,
-                                    historical_occurrences=display.historical_occurrences,
-                                    rarity_score=display.rarity_score,
-                                    likes_count=display.likes_count,
-                                )
-                                encore_rows.append(continuation_display)
-
-                    # If this track has mandatory pattern continuations, add them to encore
-                    if display.mandatory_pattern_songs and feature_store:
-                        from ..models import Track, SongTrack, Song
-                        for i, pattern_song in enumerate(display.mandatory_pattern_songs):
-                            # Get track_id (either from list or need to query)
-                            if display.mandatory_next_tracks and i < len(display.mandatory_next_tracks):
-                                next_track_id = display.mandatory_next_tracks[i]
-                            else:
-                                # Already injected in M3U phase, should be in track_cache
-                                cache_key = normalize_title(pattern_song)
-                                if cache_key in track_cache:
-                                    cached_display = track_cache.get(cache_key)
-                                    if cached_display and cached_display.track_id:
-                                        next_track_id = cached_display.track_id
-                                    else:
-                                        continue
-                                else:
-                                    continue
-
-                            # Check if already added to encore rows
-                            if any(r.track_id == next_track_id for r in encore_rows):
-                                continue
-
-                            # Get from cache or fetch
-                            cache_key = normalize_title(pattern_song)
-                            if cache_key in track_cache:
-                                continuation_display = track_cache.get(cache_key)
-                                if continuation_display:
-                                    encore_rows.append(continuation_display)
-                            else:
-                                # Shouldn't happen, but handle it
-                                logger.warning("Mandatory continuation track not in cache: %s", pattern_song)
-
-                else:
-                    entry = catalog.by_title.get(key)
-                    origin = determine_origin_from_entry(entry) if entry else None
-                    encore_rows.append(SongDisplay(title=title, origin=origin))
-        sections.append((encore.label, encore_rows))
-
-    # CRITICAL FIX: Rebuild M3U from final sections to ensure sync
-    # The issue is that songs marked for skipping were added to M3U before we knew they'd be skipped
-    if include_m3u:
-        final_m3u_lines = ["#EXTM3U"]
-        for section_label, section_tracks in sections:
-            for track in section_tracks:
-                if track.mp3_url:
-                    duration_sec = track.duration_seconds if track.duration_seconds is not None else -1
-                    show_date = track.show_date or "unknown date"
-                    segue_tag = " (rare segue)" if track.segue_type == "lottery_ticket" else ""
-                    final_m3u_lines.append(f"#EXTINF:{duration_sec},{track.title} [{show_date}]{segue_tag}")
-                    final_m3u_lines.append(track.mp3_url)
-        m3u_text = "\n".join(final_m3u_lines)
-    else:
-        m3u_text = None
+    m3u_text = _render_m3u(sections, include_m3u)
 
     missing_titles = list(missing.keys())
     return PlaylistArtifacts(

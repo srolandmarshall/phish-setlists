@@ -74,3 +74,54 @@ def test_build_playlist_artifacts_records_missing_titles():
 
     assert artifacts.missing_tracks == ["Unknown Jam"]
     assert artifacts.sections[0][1][0].title == "Unknown Jam"
+
+
+def test_build_playlist_artifacts_assembles_sections_before_rendering_m3u(mocker):
+    catalog = _catalog_with("Song Foo")
+    bar = SongCatalogEntry(
+        slug="song bar",
+        title="Song Bar",
+        original=True,
+        artist=None,
+        alias=None,
+    )
+    catalog.by_title[normalize_title(bar.title)] = bar
+    catalog.by_slug[bar.slug] = bar
+    foo_display = SongDisplay(
+        title="Song Foo",
+        mp3_url="https://example.com/foo.mp3",
+        duration_seconds=300,
+        show_date="1995-06-16",
+    )
+    bar_display = SongDisplay(
+        title="Song Bar",
+        mp3_url="https://example.com/bar.mp3",
+        duration_seconds=240,
+        show_date="1997-11-17",
+    )
+    selector = mocker.Mock(side_effect=[foo_display, bar_display])
+
+    artifacts = build_playlist_artifacts(
+        db_session=StubSession(),
+        segments=[SetSegment(label="Set 1", songs=["Song Foo"])],
+        encore=SetSegment(label="Encore", songs=["Song Bar"]),
+        catalog=catalog,
+        rng=Random(0),
+        include_m3u=True,
+        strict=False,
+        track_selector=selector,
+    )
+
+    assert artifacts.sections == [
+        ("Set 1", [foo_display]),
+        ("Encore", [bar_display]),
+    ]
+    assert artifacts.m3u_text == "\n".join(
+        [
+            "#EXTM3U",
+            "#EXTINF:300,Song Foo [1995-06-16]",
+            "https://example.com/foo.mp3",
+            "#EXTINF:240,Song Bar [1997-11-17]",
+            "https://example.com/bar.mp3",
+        ]
+    )
