@@ -223,16 +223,20 @@ def _prepared_song_frequencies(
     snapshot_era = era if era in ERA_DEFINITIONS else "all"
     params = {"era": snapshot_era, "cutoff": effective_cutoff}
     rows = session.execute(text("""
-        SELECT snapshot.canonical_set, snapshot.song_title, snapshot.appearance_count,
-               snapshot.placement_probability
-          FROM public.generation_song_pool_snapshots snapshot
-          JOIN (
-              SELECT max(snapshot_date) AS snapshot_date
-                FROM public.generation_song_pool_snapshots
-               WHERE era = :era AND (:cutoff IS NULL OR snapshot_date <= :cutoff)
-          ) latest ON snapshot.snapshot_date = latest.snapshot_date
-         WHERE snapshot.era = :era
-         ORDER BY snapshot.canonical_set, snapshot.appearance_count DESC, snapshot.song_title
+        WITH latest_per_song AS (
+            SELECT DISTINCT ON (snapshot.canonical_set, snapshot.song_title)
+                   snapshot.canonical_set, snapshot.song_title, snapshot.appearance_count
+              FROM public.generation_song_pool_snapshots snapshot
+             WHERE snapshot.era = :era
+               AND (:cutoff IS NULL OR snapshot.snapshot_date <= :cutoff)
+             ORDER BY snapshot.canonical_set, snapshot.song_title,
+                      snapshot.snapshot_date DESC
+        )
+        SELECT canonical_set, song_title, appearance_count,
+               appearance_count::double precision /
+                   sum(appearance_count) OVER (PARTITION BY canonical_set)
+          FROM latest_per_song
+         ORDER BY canonical_set, appearance_count DESC, song_title
     """), params)
 
     materialized: Dict[str, List[Tuple[str, int, float]]] = {}

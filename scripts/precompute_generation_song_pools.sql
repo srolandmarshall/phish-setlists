@@ -83,10 +83,6 @@ BEGIN
                 ('2.0', DATE '2000-01-01', DATE '2004-08-15'),
                 ('3.0', DATE '2009-03-06', DATE '2021-07-27'),
                 ('4.0', DATE '2021-07-28', DATE '9999-12-31')
-        ), latest AS (
-            SELECT era, max(snapshot_date) AS snapshot_date
-              FROM public.generation_song_pool_snapshots
-             GROUP BY era
         ), expected AS (
             SELECT e.era,
                    CASE lower(trim(t.set))
@@ -105,11 +101,12 @@ BEGIN
               LEFT JOIN public.songs song ON song.id = st.song_id
              GROUP BY e.era, canonical_set, song_title
         ), actual AS (
-            SELECT snapshot.era, snapshot.canonical_set, snapshot.song_title,
+            SELECT DISTINCT ON (snapshot.era, snapshot.canonical_set, snapshot.song_title)
+                   snapshot.era, snapshot.canonical_set, snapshot.song_title,
                    snapshot.appearance_count
               FROM public.generation_song_pool_snapshots snapshot
-              JOIN latest ON latest.era = snapshot.era
-                         AND latest.snapshot_date = snapshot.snapshot_date
+             ORDER BY snapshot.era, snapshot.canonical_set, snapshot.song_title,
+                      snapshot.snapshot_date DESC
         ), differences AS (
             (SELECT * FROM expected EXCEPT SELECT * FROM actual)
             UNION ALL
