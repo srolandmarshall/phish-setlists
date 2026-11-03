@@ -27,6 +27,7 @@ from .errors import PlaylistServiceError
 from .models import GenerationResult, PlaylistArtifacts, SegmentDetails, SongDisplay
 from .playlist_builder import build_playlist_artifacts
 from .tracks import CandidateTrack, query_tracks_for_song, resolve_track_metadata
+from .track_history import query_following_tracks_from_show
 from .segments import expand_tracks, segment_duration_seconds
 
 logger = logging.getLogger("uvicorn.error")
@@ -388,7 +389,11 @@ def _select_track_display(
 
                 # Check what actually followed this track in its show
                 if same_show_segues:
-                    following_tracks = feature_store.get_following_tracks_from_show(db_session, selection.track_id, max_tracks=len(continuation_songs))
+                    following_tracks = query_following_tracks_from_show(
+                        db_session,
+                        selection.track_id,
+                        max_tracks=len(continuation_songs),
+                    )
 
                     # Check if the following tracks match the expected pattern
                     tracks_match_pattern = True
