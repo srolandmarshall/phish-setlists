@@ -8,6 +8,9 @@ from phish_setlist_maker.generator.historical import song_frequencies_by_set
 
 def test_precomputed_pool_keeps_songs_absent_from_latest_show_date(db_session):
     """A song's last cumulative row may predate the latest show date."""
+    if db_session.get_bind().dialect.name != "postgresql":
+        pytest.skip("Precomputed song-pool snapshots use PostgreSQL-specific SQL")
+
     db_session.execute(text("""
         CREATE TABLE public.generation_song_pool_snapshots (
             snapshot_date date NOT NULL,
