@@ -92,7 +92,7 @@ class GenerationRequest:
     allow_previous_show: bool = True
     seed: Optional[int] = None
     include_playlist: bool = False
-    prefetch_track_metadata: bool = True
+    prefetch_track_metadata: bool = False
     fail_on_playlist_error: bool = False
     use_ml_features: bool = True
     ml_placement_weight: float = 0.3
