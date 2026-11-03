@@ -2,58 +2,35 @@
 """Comprehensive jamminess analysis with matplotlib charts."""
 
 from datetime import date
-from random import Random
 from typing import Dict, List
 import statistics
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
-from phish_setlist_maker.db import session_scope
-from phish_setlist_maker.generator.core import SetlistGenerator
+from phish_setlist_maker.experiments import run_generation_experiment
 
 
 def generate_setlists(jamminess: float | None, n: int, seed_offset: int, label: str) -> Dict:
     """Generate N setlists at a specific jamminess level and collect stats."""
 
-    set1_durations: List[float] = []
-    set2_durations: List[float] = []
-    set1_counts: List[int] = []
-    set2_counts: List[int] = []
-
     print(f"Generating {n} setlists for {label}...")
 
-    with session_scope() as session:
-        for i in range(n):
-            if (i + 1) % 25 == 0:
-                print(f"  Progress: {i + 1}/{n}")
+    def report_progress(completed: int, total: int) -> None:
+        if completed % 25 == 0:
+            print(f"  Progress: {completed}/{total}")
 
-            rng = Random(seed_offset + i)
-            generator = SetlistGenerator(
-                session=session,
-                rng=rng,
-                use_ml_features=True,
-                jamminess=jamminess,
-            )
-
-            try:
-                result = generator.generate(
-                    reference_date=date(2023, 12, 31),
-                    num_sets=2,
-                    include_encore=True,
-                )
-
-                # Rough duration estimates
-                set1_est = len(result.sets[0].songs) * 7 * 60
-                set2_est = len(result.sets[1].songs) * 7 * 60
-
-                set1_durations.append(set1_est / 60)  # Convert to minutes
-                set2_durations.append(set2_est / 60)
-                set1_counts.append(len(result.sets[0].songs))
-                set2_counts.append(len(result.sets[1].songs))
-
-            except Exception:
-                continue
+    samples = run_generation_experiment(
+        sample_count=n,
+        seed_offset=seed_offset,
+        jamminess=jamminess,
+        reference_date=date(2023, 12, 31),
+        on_progress=report_progress,
+    )
+    set1_durations = [sample.set_song_counts[0] * 7 for sample in samples]
+    set2_durations = [sample.set_song_counts[1] * 7 for sample in samples]
+    set1_counts = [sample.set_song_counts[0] for sample in samples]
+    set2_counts = [sample.set_song_counts[1] for sample in samples]
 
     print(f"  ✓ Completed {len(set1_durations)} setlists\n")
 
