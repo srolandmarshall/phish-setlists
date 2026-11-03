@@ -6,7 +6,11 @@ from phish_setlist_maker.service.catalog import SongCatalog, SongCatalogEntry, n
 from phish_setlist_maker.service.models import PlaylistArtifacts, SongDisplay
 from phish_setlist_maker.service.playlist_builder import build_playlist_artifacts
 from phish_setlist_maker.service.playlist_builder import _build_sections
-from phish_setlist_maker.models import SongTrack
+from phish_setlist_maker.service.playlist_duration import (
+    calculate_songs_to_skip,
+    estimate_duration_compensation,
+)
+from phish_setlist_maker.service.playlist_queries import _load_song_duration_stats
 
 
 class StubSession:
@@ -130,9 +134,9 @@ def test_build_playlist_artifacts_assembles_sections_before_rendering_m3u(mocker
     )
 
 
-def test_build_sections_deduplicates_injected_track_across_sets(mocker):
+def test_build_sections_deduplicates_within_each_section(mocker):
     catalog = _catalog_with("Song Foo")
-    for title in ("Song Bar", "Song Baz", "Common Song"):
+    for title in ("Song Bar", "Common Song"):
         entry = SongCatalogEntry(
             slug=normalize_title(title),
             title=title,
@@ -146,41 +150,29 @@ def test_build_sections_deduplicates_injected_track_across_sets(mocker):
     first = SongDisplay(title="Song Foo", track_id=1, rare_segue_next_tracks=[77])
     second = SongDisplay(title="Song Bar", track_id=2, rare_segue_next_tracks=[77])
     track_row = SimpleNamespace(
-        slug="common-song",
+        track_id=77,
+        track_slug="common-song",
         duration=300,
         likes_count=5,
         metadata_cache=None,
+        song_id=123,
+        song_title="Common Song",
+        song_slug="common-song",
     )
-    song_track = SimpleNamespace(song_id=123)
-    song = SimpleNamespace(title="Common Song", slug="common-song")
-
-    class QueryStub:
-        def __init__(self, result):
-            self.result = result
-
-        def filter(self, *_args, **_kwargs):
-            return self
-
-        def first(self):
-            return self.result
 
     class SessionStub:
-        def query(self, *entities):
-            if len(entities) > 1:
-                return QueryStub(track_row)
-            if entities[0] is SongTrack:
-                return QueryStub(song_track)
-            return QueryStub(song)
+        def execute(self, _statement):
+            return SimpleNamespace(all=lambda: [track_row])
 
-    mocker.patch(
-        "phish_setlist_maker.service.tracks.resolve_track_metadata",
+    resolve_metadata = mocker.patch(
+        "phish_setlist_maker.service.playlist_sections.resolve_track_metadata",
         return_value=("https://example.com/common.mp3", 300, "1998-07-17"),
     )
 
     sections = _build_sections(
         SessionStub(),
         [
-            SetSegment(label="Set 1", songs=["Song Foo"]),
+            SetSegment(label="Set 1", songs=["Song Foo", "Song Foo"]),
             SetSegment(label="Set 2", songs=["Song Bar"]),
         ],
         None,
@@ -195,4 +187,113 @@ def test_build_sections_deduplicates_injected_track_across_sets(mocker):
         rng=Random(0),
     )
 
-    assert [row.track_id for _, rows in sections for row in rows] == [1, 77, 2]
+    assert [row.track_id for _, rows in sections for row in rows] == [1, 77, 1, 2, 77]
+    assert resolve_metadata.call_count == 1
+
+
+def test_build_sections_batches_continuation_metadata_for_playlist(mocker):
+    source_displays = [
+        SongDisplay(title=f"Song {index}", track_id=index, rare_segue_next_tracks=[100 + index])
+        for index in range(20)
+    ]
+    rows = [
+        SimpleNamespace(
+            track_id=100 + index,
+            track_slug=f"continuation-{index}",
+            duration=300,
+            likes_count=5,
+            metadata_cache=None,
+            song_id=1000 + index,
+            song_title=f"Continuation {index}",
+            song_slug=f"continuation-{index}",
+        )
+        for index in range(20)
+    ]
+
+    class CountingSession:
+        query_count = 0
+
+        def execute(self, _statement):
+            self.query_count += 1
+            return SimpleNamespace(all=lambda: rows)
+
+    session = CountingSession()
+    mocker.patch(
+        "phish_setlist_maker.service.playlist_sections.resolve_track_metadata",
+        side_effect=lambda _session, candidate, **_kwargs: (
+            f"https://example.com/{candidate.track_id}.mp3",
+            candidate.duration,
+            "1998-07-17",
+        ),
+    )
+
+    sections = _build_sections(
+        session,
+        [SetSegment(label="Set 1", songs=[display.title for display in source_displays])],
+        None,
+        catalog=SongCatalog(by_title={}, by_slug={}),
+        track_cache={normalize_title(display.title): display for display in source_displays},
+        songs_to_skip=set(),
+        mandatory_injected_songs=set(),
+        feature_store=object(),
+        rng=Random(0),
+    )
+
+    assert session.query_count == 1
+    assert [row.track_id for row in sections[0][1]] == [
+        track_id
+        for index in range(20)
+        for track_id in (index, 100 + index)
+    ]
+
+
+def test_duration_compensation_respects_target_band():
+    assert estimate_duration_compensation(900, 300, 1000) == 50
+    assert estimate_duration_compensation(800, 200, 1000) == 0
+
+
+def test_duration_compensation_skips_lowest_liked_songs_first():
+    catalog = _catalog_with("Song A")
+    for title in ("Song B", "Trigger"):
+        entry = SongCatalogEntry(
+            slug=normalize_title(title),
+            title=title,
+            original=True,
+            artist=None,
+            alias=None,
+        )
+        catalog.by_title[normalize_title(title)] = entry
+    stats = {
+        "songa": SimpleNamespace(avg_duration=300, avg_likes=5),
+        "songb": SimpleNamespace(avg_duration=300, avg_likes=10),
+        "trigger": SimpleNamespace(avg_duration=300, avg_likes=0),
+    }
+
+    skipped = calculate_songs_to_skip(
+        "Set 1",
+        ["Song A", "Song B", "Trigger"],
+        "Trigger",
+        400,
+        catalog=catalog,
+        song_duration_stats=stats,
+    )
+
+    assert skipped == [("Set 1", "Song A"), ("Set 1", "Song B")]
+
+
+def test_song_duration_stats_load_in_one_query_for_all_requested_songs():
+    requested_slugs = [f"song-{index}" for index in range(20)]
+    rows = [SimpleNamespace(song_slug=slug) for slug in requested_slugs]
+
+    class CountingSession:
+        query_count = 0
+
+        def execute(self, _statement):
+            self.query_count += 1
+            return SimpleNamespace(all=lambda: rows)
+
+    session = CountingSession()
+    stats = _load_song_duration_stats(session, [*requested_slugs, requested_slugs[0]])
+
+    assert session.query_count == 1
+    assert set(stats) == set(requested_slugs)
