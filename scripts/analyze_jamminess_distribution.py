@@ -2,12 +2,10 @@
 """Statistical analysis of generated setlist durations at high jamminess (0.99)."""
 
 from datetime import date
-from random import Random
 from typing import Dict, List
 import statistics
 
-from phish_setlist_maker.db import session_scope
-from phish_setlist_maker.generator.core import SetlistGenerator
+from phish_setlist_maker.experiments import run_generation_experiment
 
 
 def format_time(seconds: float) -> str:
@@ -44,59 +42,48 @@ def analyze_jamminess_distribution():
     # Track extreme outliers (>120 minutes for Set 1/2)
     extreme_outliers: List[Dict] = []
 
-    with session_scope() as session:
-        for i in range(N):
-            if (i + 1) % 50 == 0:
-                print(f"  Generated {i + 1}/{N} setlists...")
+    def report_progress(completed: int, total: int) -> None:
+        if completed % 50 == 0:
+            print(f"  Generated {completed}/{total} setlists...")
 
-            # Use different seeds for variety
-            rng = Random(2000 + i)
-            generator = SetlistGenerator(
-                session=session,
-                rng=rng,
-                use_ml_features=True,
-                jamminess=JAMMINESS,  # Force high jamminess
-            )
+    def report_error(index: int, _seed: int, error: Exception) -> None:
+        print(f"  ⚠️  Error generating setlist {index}: {error}")
 
-            try:
-                result = generator.generate(
-                    reference_date=date(2023, 12, 31),
-                    num_sets=2,
-                    include_encore=True,
-                )
+    samples = run_generation_experiment(
+        sample_count=N,
+        seed_offset=2000,
+        jamminess=JAMMINESS,
+        reference_date=date(2023, 12, 31),
+        on_progress=report_progress,
+        on_error=report_error,
+    )
+    for sample in samples:
+        set1_count, set2_count = sample.set_song_counts
+        set1_est = set1_count * 7 * 60
+        set2_est = set2_count * 7 * 60
+        encore_est = sample.encore_song_count * 5 * 60
+        set1_durations.append(set1_est)
+        set2_durations.append(set2_est)
+        encore_durations.append(encore_est)
+        total_durations.append(set1_est + set2_est + encore_est)
+        set1_counts.append(set1_count)
+        set2_counts.append(set2_count)
 
-                # Rough duration estimates (7 min avg per song for sets, 5 for encore)
-                set1_est = len(result.sets[0].songs) * 7 * 60
-                set2_est = len(result.sets[1].songs) * 7 * 60
-                encore_est = len(result.encore.songs) * 5 * 60 if result.encore else 0
-
-                set1_durations.append(set1_est)
-                set2_durations.append(set2_est)
-                encore_durations.append(encore_est)
-                total_durations.append(set1_est + set2_est + encore_est)
-
-                set1_counts.append(len(result.sets[0].songs))
-                set2_counts.append(len(result.sets[1].songs))
-
-                # Check for EXTREME outliers (>120 minutes = truly excessive)
-                if set1_est > 120 * 60:
-                    extreme_outliers.append({
-                        "seed": 2000 + i,
-                        "set": "Set 1",
-                        "duration": set1_est,
-                        "songs": len(result.sets[0].songs),
-                    })
-                if set2_est > 120 * 60:
-                    extreme_outliers.append({
-                        "seed": 2000 + i,
-                        "set": "Set 2",
-                        "duration": set2_est,
-                        "songs": len(result.sets[1].songs),
-                    })
-
-            except Exception as e:
-                print(f"  ⚠️  Error generating setlist {i}: {e}")
-                continue
+        # Check for EXTREME outliers (>120 minutes = truly excessive)
+        if set1_est > 120 * 60:
+            extreme_outliers.append({
+                "seed": sample.seed,
+                "set": "Set 1",
+                "duration": set1_est,
+                "songs": set1_count,
+            })
+        if set2_est > 120 * 60:
+            extreme_outliers.append({
+                "seed": sample.seed,
+                "set": "Set 2",
+                "duration": set2_est,
+                "songs": set2_count,
+            })
 
     print(f"\n✓ Generated {len(set1_durations)} setlists successfully\n")
 

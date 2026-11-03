@@ -2,12 +2,10 @@
 """Comprehensive statistical analysis across all jamminess levels."""
 
 from datetime import date
-from random import Random
 from typing import Dict, List, Optional, Tuple
 import statistics
 
-from phish_setlist_maker.db import session_scope
-from phish_setlist_maker.generator.core import SetlistGenerator
+from phish_setlist_maker.experiments import run_generation_experiment
 
 
 def format_time(seconds: float) -> str:
@@ -20,51 +18,26 @@ def format_time(seconds: float) -> str:
 def generate_setlists(jamminess: Optional[float], n: int, seed_offset: int, label: str) -> Dict:
     """Generate N setlists at a specific jamminess level and collect stats."""
 
-    set1_durations: List[float] = []
-    set2_durations: List[float] = []
-    encore_durations: List[float] = []
-    set1_counts: List[int] = []
-    set2_counts: List[int] = []
-    extreme_outliers = 0  # Sets >120 minutes
+    def report_progress(completed: int, total: int) -> None:
+        if completed % 10 == 0 or completed == total:
+            print_progress_bar(completed, total, label)
 
-    with session_scope() as session:
-        for i in range(n):
-            # Show progress
-            if (i + 1) % 10 == 0 or i + 1 == n:
-                print_progress_bar(i + 1, n, label)
-
-            rng = Random(seed_offset + i)
-            generator = SetlistGenerator(
-                session=session,
-                rng=rng,
-                use_ml_features=True,
-                jamminess=jamminess,
-            )
-
-            try:
-                result = generator.generate(
-                    reference_date=date(2023, 12, 31),
-                    num_sets=2,
-                    include_encore=True,
-                )
-
-                # Rough duration estimates
-                set1_est = len(result.sets[0].songs) * 7 * 60
-                set2_est = len(result.sets[1].songs) * 7 * 60
-                encore_est = len(result.encore.songs) * 5 * 60 if result.encore else 0
-
-                set1_durations.append(set1_est)
-                set2_durations.append(set2_est)
-                encore_durations.append(encore_est)
-                set1_counts.append(len(result.sets[0].songs))
-                set2_counts.append(len(result.sets[1].songs))
-
-                # Count extreme outliers
-                if set1_est > 120 * 60 or set2_est > 120 * 60:
-                    extreme_outliers += 1
-
-            except Exception:
-                continue
+    samples = run_generation_experiment(
+        sample_count=n,
+        seed_offset=seed_offset,
+        jamminess=jamminess,
+        reference_date=date(2023, 12, 31),
+        on_progress=report_progress,
+    )
+    set1_counts = [sample.set_song_counts[0] for sample in samples]
+    set2_counts = [sample.set_song_counts[1] for sample in samples]
+    set1_durations = [count * 7 * 60 for count in set1_counts]
+    set2_durations = [count * 7 * 60 for count in set2_counts]
+    encore_durations = [sample.encore_song_count * 5 * 60 for sample in samples]
+    extreme_outliers = sum(
+        set1_duration > 120 * 60 or set2_duration > 120 * 60
+        for set1_duration, set2_duration in zip(set1_durations, set2_durations)
+    )
 
     return {
         'set1_durations': set1_durations,
