@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from ..constants import ERA_DEFINITIONS
 from ..generator import GeneratedSetlist, SetlistGenerator, random_set_lengths
 from ..generator.core import GenerationMetadata, SetSegment
+from ..generator.openers import apply_historical_set_openers
 from ..models import Show, SongTrack, Track, Venue
 from .catalog import (
     SongCatalog,
@@ -658,6 +659,13 @@ def generate_show(session: Session, request: GenerationRequest) -> GenerationRes
         exclude_previous_show=not allow_previous_show,
         max_segues_per_set=request.max_segues_per_set,
     )
+    if request.use_ml_features:
+        apply_historical_set_openers(
+            generated,
+            generator._feature_store,
+            era=effective_era,
+            rng=rng,
+        )
     logger.info("⏱️  Setlist generation took %.2fs", time.time() - t1)
 
     metadata = generated.metadata

@@ -12,7 +12,10 @@ from phish_setlist_maker.analysis.features import (
     compute_transition_lift,
     identify_multi_home_songs,
 )
-from phish_setlist_maker.analysis.database import build_set_ending_frequencies
+from phish_setlist_maker.analysis.database import (
+    build_set_ending_frequencies,
+    build_set_opening_frequencies,
+)
 
 
 def main():
@@ -97,6 +100,15 @@ def main():
             print(f"  Top {set_name} enders:")
             for _, row in top_enders.iterrows():
                 print(f"    {row['song_effective_title']}: {row['ending_probability']:.1%} ({row['ending_count']}/{row['total_count']})")
+
+    print("\nBuilding era-aware set-opening frequencies...")
+    set_openings = build_set_opening_frequencies(
+        tracks_df,
+        allowed_sets=["set1", "set2", "set3"],
+    )
+    openings_path = args.out_dir / "set_opening_frequencies.parquet"
+    set_openings.to_parquet(openings_path, index=False)
+    print(f"  → {openings_path} ({len(set_openings)} song-set-era combinations)")
 
     print("\n✅ Feature engineering complete!")
     print(f"   All outputs in {args.out_dir}/")
