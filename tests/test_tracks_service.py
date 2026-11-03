@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+import os
 from random import Random
+from threading import Lock
+import time
 
+import pandas as pd
 import responses
 
 from phish_setlist_maker.models import Show, Song, SongTrack, Track
 from phish_setlist_maker.service.tracks import (
+    _read_set_ending_lookup,
     fetch_remote_track_metadata,
     query_tracks_for_song,
     resolve_track_metadata,
@@ -205,3 +211,58 @@ def test_resolve_track_metadata_refreshes_when_cache_invalid(db_session, monkeyp
 
     refreshed_track = db_session.get(Track, first_id)
     assert refreshed_track.metadata_cache["mp3_url"] == mp3_url
+
+
+def test_set_ending_lookup_cache_reuses_file_and_reloads_after_change(
+    monkeypatch,
+    tmp_path,
+):
+    lookup_path = tmp_path / "set_ending_tracks.parquet"
+    lookup_path.write_bytes(b"initial")
+    frames = [pd.DataFrame({"version": [1]}), pd.DataFrame({"version": [2]})]
+    reads = []
+
+    def fake_read_parquet(path):
+        reads.append(path)
+        return frames[len(reads) - 1]
+
+    monkeypatch.setattr("pandas.read_parquet", fake_read_parquet)
+
+    first = _read_set_ending_lookup(lookup_path)
+    assert _read_set_ending_lookup(lookup_path) is first
+    assert len(reads) == 1
+
+    previous_stat = lookup_path.stat()
+    lookup_path.write_bytes(b"replacement")
+    lookup_path.touch()
+    os.utime(
+        lookup_path,
+        ns=(previous_stat.st_atime_ns, previous_stat.st_mtime_ns + 1_000_000_000),
+    )
+
+    second = _read_set_ending_lookup(lookup_path)
+    assert second is frames[1]
+    assert len(reads) == 2
+
+
+def test_set_ending_lookup_cache_serializes_concurrent_reads(monkeypatch, tmp_path):
+    lookup_path = tmp_path / "set_ending_tracks.parquet"
+    lookup_path.write_bytes(b"initial")
+    frame = pd.DataFrame({"version": [1]})
+    read_count = 0
+    read_count_lock = Lock()
+
+    def fake_read_parquet(path):
+        nonlocal read_count
+        with read_count_lock:
+            read_count += 1
+        time.sleep(0.05)
+        return frame
+
+    monkeypatch.setattr("pandas.read_parquet", fake_read_parquet)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(_read_set_ending_lookup, [lookup_path] * 8))
+
+    assert read_count == 1
+    assert all(result is frame for result in results)
