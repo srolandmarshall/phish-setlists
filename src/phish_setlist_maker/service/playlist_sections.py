@@ -18,56 +18,6 @@ from .tracks import CandidateTrack, resolve_track_metadata
 logger = logging.getLogger("uvicorn.error")
 
 
-def _process_segment_tracks(
-    segments: Sequence[SetSegment],
-    encore: Optional[SetSegment],
-    append_track_with_injection: Callable[..., None],
-) -> None:
-    """Resolve track displays for each generated segment in set order."""
-    for segment in segments:
-        from ..generator.historical import normalize_set_label
-        canonical = normalize_set_label(segment.label) if segment.label else None
-
-        # Flatten segment songs for indexing
-        segment_songs_flat = []
-        for raw_song in segment.songs:
-            segment_songs_flat.extend(split_song_titles(raw_song))
-
-        song_idx = 0
-        for idx, raw_song in enumerate(segment.songs):
-            is_last = (idx == len(segment.songs) - 1)
-            for title in split_song_titles(raw_song):
-                append_track_with_injection(
-                    title,
-                    is_set_ender=is_last,
-                    canonical_set=canonical,
-                    current_segment_songs=segment_songs_flat,
-                    current_song_index=song_idx,
-                    segment_label=segment.label
-                )
-                song_idx += 1
-
-    if encore:
-        # Flatten encore songs for indexing
-        encore_songs_flat = []
-        for raw_song in encore.songs:
-            encore_songs_flat.extend(split_song_titles(raw_song))
-
-        song_idx = 0
-        for idx, raw_song in enumerate(encore.songs):
-            is_last = (idx == len(encore.songs) - 1)
-            for title in split_song_titles(raw_song):
-                append_track_with_injection(
-                    title,
-                    is_set_ender=is_last,
-                    canonical_set="encore",
-                    current_segment_songs=encore_songs_flat,
-                    current_song_index=song_idx,
-                    segment_label=encore.label
-                )
-                song_idx += 1
-
-
 def _placed_rare_continuation(
     db_session: Session,
     track_id: int,
@@ -298,10 +248,15 @@ def _render_m3u(
         return None
 
     lines = ["#EXTM3U"]
+    emitted_segue_track_ids: Set[int] = set()
     for _section_label, section_tracks in sections:
         for track in section_tracks:
             if not track.mp3_url:
                 continue
+            if track.is_segue and track.track_id is not None:
+                if track.track_id in emitted_segue_track_ids:
+                    continue
+                emitted_segue_track_ids.add(track.track_id)
             duration_sec = track.duration_seconds if track.duration_seconds is not None else -1
             show_date = track.show_date or "unknown date"
             segue_tag = " (rare segue)" if track.segue_type == "lottery_ticket" else ""

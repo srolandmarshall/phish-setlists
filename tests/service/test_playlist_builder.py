@@ -1,11 +1,13 @@
+import ast
 from random import Random
+from pathlib import Path
 from types import SimpleNamespace
 
 from phish_setlist_maker.generator.core import SetSegment
 from phish_setlist_maker.service.catalog import SongCatalog, SongCatalogEntry, normalize_title
 from phish_setlist_maker.service.models import PlaylistArtifacts, SongDisplay
 from phish_setlist_maker.service.playlist_builder import build_playlist_artifacts
-from phish_setlist_maker.service.playlist_builder import _build_sections
+from phish_setlist_maker.service.playlist_builder import _build_sections, _render_m3u
 from phish_setlist_maker.service.playlist_duration import (
     calculate_songs_to_skip,
     estimate_duration_compensation,
@@ -189,6 +191,8 @@ def test_build_sections_deduplicates_within_each_section(mocker):
 
     assert [row.track_id for _, rows in sections for row in rows] == [1, 77, 1, 2, 77]
     assert resolve_metadata.call_count == 1
+    m3u = _render_m3u(sections, include_m3u=True)
+    assert m3u.count("https://example.com/common.mp3") == 1
 
 
 def test_build_sections_batches_continuation_metadata_for_playlist(mocker):
@@ -297,3 +301,19 @@ def test_song_duration_stats_load_in_one_query_for_all_requested_songs():
 
     assert session.query_count == 1
     assert set(stats) == set(requested_slugs)
+
+
+def test_playlist_modules_keep_facade_and_helpers_focused():
+    service_dir = Path(__file__).resolve().parents[2] / "src/phish_setlist_maker/service"
+    modules = list(service_dir.glob("playlist_*.py"))
+
+    assert modules
+    assert all(len(path.read_text().splitlines()) <= 300 for path in modules)
+    for path in modules:
+        tree = ast.parse(path.read_text())
+        functions = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+        assert all(node.end_lineno - node.lineno + 1 <= 120 for node in functions), path.name

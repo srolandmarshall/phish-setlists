@@ -10,8 +10,11 @@ from sqlalchemy.orm import Session
 from ..generator.core import SetSegment
 from .catalog import SongCatalog
 from .models import PlaylistArtifacts
-from .playlist_sections import _build_sections, _process_segment_tracks, _render_m3u
-from .playlist_track_assembly import build_playlist_artifacts as _assemble_playlist_artifacts
+from .playlist_sections import _build_sections, _render_m3u
+from .playlist_track_assembly import (
+    _process_segment_tracks,
+    build_playlist_artifacts as _assemble_playlist_artifacts,
+)
 
 
 def build_playlist_artifacts(

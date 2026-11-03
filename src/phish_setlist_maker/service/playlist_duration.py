@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .catalog import SongCatalog, normalize_title
+from .models import SongDisplay
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -75,3 +76,102 @@ def calculate_songs_to_skip(
             duration_to_compensate,
         )
     return to_skip
+
+
+def compensate_for_continuations(
+    segment_label: Optional[str],
+    current_segment_songs: Optional[List[str]],
+    current_song_title: str,
+    display: Optional[SongDisplay],
+    set_lengths: Optional[Dict[str, int]],
+    *,
+    catalog: SongCatalog,
+    song_duration_stats: Dict[str, object],
+    continuation_records: Dict[int, object],
+) -> List[Tuple[str, str]]:
+    """Select songs to remove when injected continuations overfill a segment."""
+    if not display or not segment_label or not current_segment_songs or not set_lengths:
+        return []
+    target_duration = set_lengths.get(segment_label)
+    if not target_duration:
+        return []
+
+    added_duration = 0
+    if display.rare_segue_next_tracks:
+        for track_id in display.rare_segue_next_tracks:
+            metadata = continuation_records.get(track_id)
+            if metadata and metadata.duration:
+                duration = metadata.duration
+                added_duration += duration // 1000 if duration > 6000 else duration
+        logger.info(
+            "🎰 Lottery ticket triggered for %s with %d continuation tracks (total duration: %ds)",
+            current_song_title,
+            len(display.rare_segue_next_tracks),
+            added_duration,
+        )
+
+    if display.mandatory_pattern_songs:
+        if display.mandatory_next_tracks:
+            for track_id in display.mandatory_next_tracks:
+                metadata = continuation_records.get(track_id)
+                if metadata and metadata.duration:
+                    duration = metadata.duration
+                    added_duration += duration // 1000 if duration > 6000 else duration
+        else:
+            added_duration += len(display.mandatory_pattern_songs) * 420
+        logger.info(
+            "🔗 Mandatory pattern triggered for %s with %d continuation songs (estimated duration: %ds)",
+            current_song_title,
+            len(display.mandatory_pattern_songs),
+            added_duration,
+        )
+
+    if added_duration <= 0:
+        return []
+
+    current_duration = 0
+    for title in current_segment_songs:
+        entry = catalog.by_title.get(normalize_title(title))
+        stats = song_duration_stats.get(entry.slug) if entry else None
+        avg_duration = stats.avg_duration if stats else None
+        if avg_duration:
+            avg_duration = avg_duration / 1000 if avg_duration > 6000 else avg_duration
+            current_duration += int(avg_duration)
+
+    projected_total = current_duration + added_duration
+    max_threshold = target_duration * 1.15
+    overage = estimate_duration_compensation(current_duration, added_duration, target_duration)
+    if overage <= 0:
+        logger.info(
+            "📊 Set %s: projected=%ds, target=%ds, max_threshold=%ds (15%% over) - no compensation needed",
+            segment_label,
+            projected_total,
+            target_duration,
+            int(max_threshold),
+        )
+        return []
+
+    logger.info(
+        "📊 Set %s: projected=%ds, target=%ds, max_threshold=%ds (15%% over), overage=%ds - will compensate",
+        segment_label,
+        projected_total,
+        target_duration,
+        int(max_threshold),
+        int(overage),
+    )
+    skipped = calculate_songs_to_skip(
+        segment_label,
+        current_segment_songs,
+        current_song_title,
+        overage,
+        catalog=catalog,
+        song_duration_stats=song_duration_stats,
+    )
+    if skipped:
+        logger.info(
+            "  Will skip %d songs to compensate for overage (%ds): %s",
+            len(skipped),
+            int(overage),
+            ", ".join(f"{label}/{title}" for label, title in skipped),
+        )
+    return skipped
