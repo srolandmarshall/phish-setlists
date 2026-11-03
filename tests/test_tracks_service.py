@@ -10,11 +10,14 @@ from threading import Lock
 import time
 
 import pandas as pd
+import pytest
 import responses
+from sqlalchemy import text
 
 from phish_setlist_maker.models import Show, Song, SongTrack, Track
 from phish_setlist_maker.service.tracks import (
     _read_set_ending_lookup,
+    _update_track_cache,
     fetch_remote_track_metadata,
     query_tracks_for_song,
     resolve_track_metadata,
@@ -73,6 +76,28 @@ def test_query_tracks_for_song_orders_candidates(db_session):
     assert len(candidates) == 2
     assert candidates[0].track_id == first_id
     assert candidates[1].track_id == second_id
+
+
+def test_failed_cache_write_does_not_poison_postgres_session(db_session):
+    if db_session.get_bind().dialect.name != "postgresql":
+        pytest.skip(
+            "PostgreSQL transaction-abort behavior requires a PostgreSQL test database"
+        )
+
+    track_id, _ = _seed_data(db_session)
+    # Model an older schema where the optional API cache column is absent.
+    db_session.execute(text("ALTER TABLE tracks DROP COLUMN metadata_cache"))
+
+    _update_track_cache(
+        db_session,
+        track_id,
+        mp3_url="https://phish.in/audio/tweezer.mp3",
+        duration=600,
+        show_date="2024-07-01",
+    )
+
+    assert db_session.execute(text("SELECT 1")).scalar_one() == 1
+    db_session.commit()
 
 
 def test_fetch_remote_track_metadata_falls_back_to_tracks_endpoint(db_session):

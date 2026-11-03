@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from sqlalchemy import select, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from ..models import Show, Song, SongTrack, Track
@@ -311,16 +312,22 @@ def _update_track_cache(
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
-        session.execute(
-            update(Track)
-            .where(Track.id == track_id)
-            .values(metadata_cache=values)
+        # A failed statement aborts the current transaction on PostgreSQL.
+        # Isolate this optional write so a schema mismatch cannot poison the
+        # caller's generation transaction or discard its unrelated work.
+        with session.begin_nested():
+            session.execute(
+                update(Track)
+                .where(Track.id == track_id)
+                .values(metadata_cache=values)
+            )
+            session.flush()
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "Unable to update optional metadata cache for track_id=%s: %s",
+            track_id,
+            exc,
         )
-        session.flush()
-    except Exception:
-        # Skip cache update if database schema doesn't match
-        # (e.g., missing metadata_cache column or other schema issues)
-        pass
 
 
 def batch_prefetch_track_metadata(
