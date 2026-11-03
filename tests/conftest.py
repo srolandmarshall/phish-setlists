@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import sys
+import os
+from uuid import uuid4
 from collections.abc import Iterator
 from pathlib import Path
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
 from unittest.mock import patch
 
 from phish_setlist_maker.models import Base  # noqa: F401 - ensure all models registered
@@ -35,24 +36,44 @@ def pytest_configure(config):
 
 @pytest.fixture()
 def db_session() -> Iterator[Session]:
-    """Provide an isolated in-memory SQLite session for each test."""
+    """Provide an isolated PostgreSQL schema and transaction for each test."""
+    database_url = os.environ.get("TEST_DATABASE_URL")
+    if not database_url:
+        pytest.fail("TEST_DATABASE_URL must point to a disposable PostgreSQL test database")
+    if not database_url.startswith(("postgresql://", "postgresql+psycopg2://")):
+        pytest.fail("TEST_DATABASE_URL must use PostgreSQL (postgresql:// or postgresql+psycopg2://)")
 
+    schema = f"pytest_{uuid4().hex}"
+    admin_engine = create_engine(database_url, future=True)
+    with admin_engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+
+    # Use a separate engine so every pooled connection has this test's schema first
+    # in search_path. The randomized schema keeps parallel tests independent.
     engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
+        database_url,
         future=True,
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
+        connect_args={"options": f"-csearch_path={schema}"},
     )
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, future=True)
-
-    session = SessionLocal()
+    connection = engine.connect()
+    transaction = connection.begin()
+    Base.metadata.create_all(connection)
+    session = sessionmaker(
+        bind=connection,
+        expire_on_commit=False,
+        future=True,
+        join_transaction_mode="create_savepoint",
+    )()
     try:
         yield session
-        session.rollback()
     finally:
         session.close()
+        transaction.rollback()
+        connection.close()
         engine.dispose()
+        with admin_engine.begin() as cleanup:
+            cleanup.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin_engine.dispose()
 
 
 # ============================================================================
