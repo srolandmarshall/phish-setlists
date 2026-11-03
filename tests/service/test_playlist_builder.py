@@ -1,9 +1,12 @@
 from random import Random
+from types import SimpleNamespace
 
 from phish_setlist_maker.generator.core import SetSegment
 from phish_setlist_maker.service.catalog import SongCatalog, SongCatalogEntry, normalize_title
 from phish_setlist_maker.service.models import PlaylistArtifacts, SongDisplay
 from phish_setlist_maker.service.playlist_builder import build_playlist_artifacts
+from phish_setlist_maker.service.playlist_builder import _build_sections
+from phish_setlist_maker.models import SongTrack
 
 
 class StubSession:
@@ -125,3 +128,71 @@ def test_build_playlist_artifacts_assembles_sections_before_rendering_m3u(mocker
             "https://example.com/bar.mp3",
         ]
     )
+
+
+def test_build_sections_deduplicates_injected_track_across_sets(mocker):
+    catalog = _catalog_with("Song Foo")
+    for title in ("Song Bar", "Song Baz", "Common Song"):
+        entry = SongCatalogEntry(
+            slug=normalize_title(title),
+            title=title,
+            original=True,
+            artist=None,
+            alias=None,
+        )
+        catalog.by_title[normalize_title(title)] = entry
+        catalog.by_slug[entry.slug] = entry
+
+    first = SongDisplay(title="Song Foo", track_id=1, rare_segue_next_tracks=[77])
+    second = SongDisplay(title="Song Bar", track_id=2, rare_segue_next_tracks=[77])
+    track_row = SimpleNamespace(
+        slug="common-song",
+        duration=300,
+        likes_count=5,
+        metadata_cache=None,
+    )
+    song_track = SimpleNamespace(song_id=123)
+    song = SimpleNamespace(title="Common Song", slug="common-song")
+
+    class QueryStub:
+        def __init__(self, result):
+            self.result = result
+
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def first(self):
+            return self.result
+
+    class SessionStub:
+        def query(self, *entities):
+            if len(entities) > 1:
+                return QueryStub(track_row)
+            if entities[0] is SongTrack:
+                return QueryStub(song_track)
+            return QueryStub(song)
+
+    mocker.patch(
+        "phish_setlist_maker.service.tracks.resolve_track_metadata",
+        return_value=("https://example.com/common.mp3", 300, "1998-07-17"),
+    )
+
+    sections = _build_sections(
+        SessionStub(),
+        [
+            SetSegment(label="Set 1", songs=["Song Foo"]),
+            SetSegment(label="Set 2", songs=["Song Bar"]),
+        ],
+        None,
+        catalog=catalog,
+        track_cache={
+            normalize_title("Song Foo"): first,
+            normalize_title("Song Bar"): second,
+        },
+        songs_to_skip=set(),
+        mandatory_injected_songs=set(),
+        feature_store=object(),
+        rng=Random(0),
+    )
+
+    assert [row.track_id for _, rows in sections for row in rows] == [1, 77, 2]

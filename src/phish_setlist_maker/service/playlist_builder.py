@@ -82,6 +82,7 @@ def _build_sections(
 ) -> List[Tuple[str, List[SongDisplay]]]:
     """Assemble display rows from selected tracks and injected continuations."""
     sections: List[Tuple[str, List[SongDisplay]]] = []
+    injected_segue_track_ids: Set[int] = set()
     for segment in segments:
         rows: List[SongDisplay] = []
         for raw_song in segment.songs:
@@ -105,8 +106,8 @@ def _build_sections(
                     if display.rare_segue_next_tracks and feature_store:
                         from ..models import Track, SongTrack, Song
                         for next_track_id in display.rare_segue_next_tracks:
-                            # Check if already added to THIS section's rows
-                            if any(r.track_id == next_track_id for r in rows):
+                            # A continuation should appear only once across the playlist.
+                            if next_track_id in injected_segue_track_ids:
                                 continue
 
                             track_row = db_session.query(
@@ -165,6 +166,7 @@ def _build_sections(
                                     likes_count=display.likes_count,
                                 )
                                 rows.append(continuation_display)
+                                injected_segue_track_ids.add(next_track_id)
 
                     # If this track has mandatory pattern continuations, add them to the section
                     if display.mandatory_pattern_songs and feature_store:
@@ -185,8 +187,8 @@ def _build_sections(
                                 else:
                                     continue
 
-                            # Check if already added to THIS section's rows
-                            if any(r.track_id == next_track_id for r in rows):
+                            # Mandatory continuations share the playlist-wide dedupe set.
+                            if next_track_id in injected_segue_track_ids:
                                 continue
 
                             # Get from cache or fetch
@@ -195,6 +197,7 @@ def _build_sections(
                                 continuation_display = track_cache.get(cache_key)
                                 if continuation_display:
                                     rows.append(continuation_display)
+                                    injected_segue_track_ids.add(next_track_id)
                             else:
                                 # Shouldn't happen, but handle it
                                 logger.warning("Mandatory continuation track not in cache: %s", pattern_song)
@@ -228,8 +231,8 @@ def _build_sections(
                     if display.rare_segue_next_tracks and feature_store:
                         from ..models import Track, SongTrack, Song
                         for next_track_id in display.rare_segue_next_tracks:
-                            # Check if already added to encore rows
-                            if any(r.track_id == next_track_id for r in encore_rows):
+                            # The same continuation may be referenced from another section.
+                            if next_track_id in injected_segue_track_ids:
                                 continue
 
                             track_row = db_session.query(
@@ -288,6 +291,7 @@ def _build_sections(
                                     likes_count=display.likes_count,
                                 )
                                 encore_rows.append(continuation_display)
+                                injected_segue_track_ids.add(next_track_id)
 
                     # If this track has mandatory pattern continuations, add them to encore
                     if display.mandatory_pattern_songs and feature_store:
@@ -308,8 +312,8 @@ def _build_sections(
                                 else:
                                     continue
 
-                            # Check if already added to encore rows
-                            if any(r.track_id == next_track_id for r in encore_rows):
+                            # Keep mandatory continuations unique across sets and encore.
+                            if next_track_id in injected_segue_track_ids:
                                 continue
 
                             # Get from cache or fetch
@@ -318,6 +322,7 @@ def _build_sections(
                                 continuation_display = track_cache.get(cache_key)
                                 if continuation_display:
                                     encore_rows.append(continuation_display)
+                                    injected_segue_track_ids.add(next_track_id)
                             else:
                                 # Shouldn't happen, but handle it
                                 logger.warning("Mandatory continuation track not in cache: %s", pattern_song)
